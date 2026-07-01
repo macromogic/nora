@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NORA_HOME="${NORA_HOME:-$HOME/nora}"
+
+cmd="${1:-help}"
+
+case "$cmd" in
+  help)
+    cat <<'EOF'
+Nora — personal research workflow system
+
+Commands:
+  nora init       Initialize Nora state in the current project
+  nora doctor     Check whether the current project has Nora state files
+EOF
+    ;;
+
+  init)
+    if [ -d ".nora" ]; then
+      echo "Nora state already exists: .nora/"
+      exit 0
+    fi
+
+    mkdir -p .nora
+
+    cp "$NORA_HOME/skills/nora-project-manager/templates/AGENTS.md" ./AGENTS.md
+    cp -r "$NORA_HOME/skills/nora-project-manager/templates/.nora/"* ./.nora/
+
+    echo "Initialized Nora project state in:"
+    echo "  $(pwd)/.nora"
+    ;;
+
+  doctor)
+    echo "Checking Nora project state..."
+
+    missing=0
+
+    for f in \
+      ".nora/PROJECT_STATE.yaml" \
+      ".nora/CONTEXT_BRIEF.md" \
+      ".nora/SESSION_LOG.md" \
+      ".nora/NEXT_ACTIONS.md" \
+      ".nora/OPEN_LOOPS.md"
+    do
+      if [ -f "$f" ]; then
+        echo "OK: $f"
+      else
+        echo "MISSING: $f"
+        missing=1
+      fi
+    done
+
+    if [ "$missing" -eq 0 ]; then
+      echo "Nora project state looks OK."
+    else
+      echo "Some Nora files are missing."
+      exit 1
+    fi
+    ;;
+
+  *)
+    echo "Unknown command: $cmd"
+    echo "Run: nora help"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,43 @@
+project:
+  name: "TODO"
+  type: "research project"
+  stage: "stale / rebooting"
+  last_active: "unknown"
+  last_updated: "TODO"
+
+one_sentence_summary: >
+  TODO
+
+current_goal: >
+  Reconstruct the project state, identify blockers, and define the next smallest useful action.
+
+known_artifacts:
+  manuscript:
+    status: "unknown"
+    path: null
+  code:
+    status: "unknown"
+    path: null
+  experiments:
+    status: "unknown"
+    path: null
+  references:
+    status: "unknown"
+    path: null
+  notes:
+    status: "unknown"
+    path: null
+
+current_status:
+  what_is_done: []
+  what_is_partial: []
+  what_is_stale: []
+  what_is_missing: []
+  what_is_unclear:
+    - "The current artifact map has not been reconstructed yet."
+  what_is_blocked:
+    - "Project context needs to be recovered."
+
+next_checkpoint:
+  goal: "Produce an artifact map and a concrete next-action list."
+  due: null
