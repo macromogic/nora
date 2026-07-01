@@ -14,7 +14,22 @@ Commands:
   nora init           Initialize Nora state in the current project
   nora doctor         Check whether the current project has Nora state files
   nora install-skill  Symlink the nora-project-manager skill into Claude Code / Codex
+  nora update         Pull the latest nora CLI and skills from git
 EOF
+    ;;
+
+  update)
+    if [ ! -d "$NORA_HOME/.git" ]; then
+      echo "NORA_HOME is not a git repository: $NORA_HOME"
+      exit 1
+    fi
+
+    if [ -n "$(git -C "$NORA_HOME" status --porcelain)" ]; then
+      echo "NORA_HOME has uncommitted changes, refusing to update: $NORA_HOME"
+      exit 1
+    fi
+
+    git -C "$NORA_HOME" pull --ff-only
     ;;
 
   install-skill)
