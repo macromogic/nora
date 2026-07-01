@@ -16,9 +16,10 @@ This skill currently supports two workflows:
 
 ## Argument routing
 
+- If `$ARGUMENTS` is `help` → print this skill's usage: the supported workflows (`reboot`, `session-update`) and their invocation form (e.g. `/nora-project-manager reboot`). Do not run any workflow.
 - If `$ARGUMENTS` starts with `reboot` → follow `workflows/reboot.md`.
 - If `$ARGUMENTS` starts with `session-update` → follow `workflows/session-update.md`.
-- If `$ARGUMENTS` is empty → infer the workflow from conversation context, or ask the user which one they want.
+- Otherwise (empty, or any unrecognized argument) → infer the workflow from conversation context, or ask the user which one they want.
 
 ## Core principles
 
