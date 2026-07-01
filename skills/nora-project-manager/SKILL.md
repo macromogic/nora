@@ -14,6 +14,12 @@ This skill currently supports two workflows:
 - `reboot`: recover a stale or long-inactive project
 - `session-update`: summarize the current session and propose project state updates
 
+## Argument routing
+
+- If `$ARGUMENTS` starts with `reboot` → follow `workflows/reboot.md`.
+- If `$ARGUMENTS` starts with `session-update` → follow `workflows/session-update.md`.
+- If `$ARGUMENTS` is empty → infer the workflow from conversation context, or ask the user which one they want.
+
 ## Core principles
 
 1. Do not expand project scope before recovering the current state.

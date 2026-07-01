@@ -11,9 +11,44 @@ case "$cmd" in
 Nora — personal research workflow system
 
 Commands:
-  nora init       Initialize Nora state in the current project
-  nora doctor     Check whether the current project has Nora state files
+  nora init           Initialize Nora state in the current project
+  nora doctor         Check whether the current project has Nora state files
+  nora install-skill  Symlink the nora-project-manager skill into Claude Code / Codex
 EOF
+    ;;
+
+  install-skill)
+    src="$NORA_HOME/skills/nora-project-manager"
+
+    if [ ! -d "$src" ]; then
+      echo "Skill source not found: $src"
+      exit 1
+    fi
+
+    installed_any=0
+
+    if [ -d "$HOME/.claude" ]; then
+      mkdir -p "$HOME/.claude/skills"
+      ln -sfn "$src" "$HOME/.claude/skills/nora-project-manager"
+      ln -sfn "$src" "$HOME/.claude/skills/nora"
+      echo "Installed for Claude Code: $HOME/.claude/skills/nora-project-manager (alias: /nora)"
+      installed_any=1
+    fi
+
+    if [ -d "$HOME/.codex" ]; then
+      mkdir -p "$HOME/.codex/skills"
+      ln -sfn "$src" "$HOME/.codex/skills/nora-project-manager"
+      ln -sfn "$src" "$HOME/.codex/skills/nora"
+      echo "Installed for Codex: $HOME/.codex/skills/nora-project-manager (alias: nora)"
+      installed_any=1
+    fi
+
+    if [ "$installed_any" -eq 0 ]; then
+      echo "No ~/.claude or ~/.codex directory found. Nothing installed."
+      exit 1
+    fi
+
+    echo "Restart your agent session to pick up the new skill."
     ;;
 
   init)
