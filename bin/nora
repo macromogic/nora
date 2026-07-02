@@ -29,7 +29,17 @@ EOF
       exit 1
     fi
 
+    agents_template="skills/nora-project-manager/templates/AGENTS.md"
+    before="$(git -C "$NORA_HOME" log -1 --format=%H -- "$agents_template")"
+
     git -C "$NORA_HOME" pull --ff-only
+
+    after="$(git -C "$NORA_HOME" log -1 --format=%H -- "$agents_template")"
+
+    if [ "$before" != "$after" ]; then
+      echo "Note: $agents_template changed."
+      echo "Run '/nora sync-agents' in your agent session for any already-initialized project you want to sync."
+    fi
     ;;
 
   install-skill)

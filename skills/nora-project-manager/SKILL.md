@@ -9,11 +9,12 @@ description: Start, recover, maintain, and update research project state across 
 
 Help maintain research project continuity across sessions by reading local `.nora/` state files, reconstructing project status, identifying blockers, and proposing concrete next actions.
 
-This skill currently supports three workflows:
+This skill currently supports four workflows:
 
 - `new`: bootstrap a brand-new project with no prior state
 - `reboot`: recover a stale or long-inactive project
 - `session-update`: summarize the current session and propose project state updates
+- `sync-agents`: check the project's `AGENTS.md` against the current template and propose an update
 
 ## Precondition: Nora state must exist
 
@@ -24,11 +25,12 @@ Before running any workflow, check whether `.nora/` exists in the current projec
 
 ## Argument routing
 
-- If `$ARGUMENTS` is `help` → print this skill's usage: the supported workflows (`new`, `reboot`, `session-update`) and their invocation form (e.g. `/nora-project-manager reboot`). Do not run any workflow.
+- If `$ARGUMENTS` is `help` → print this skill's usage: the supported workflows (`new`, `reboot`, `session-update`, `sync-agents`) and their invocation form (e.g. `/nora-project-manager reboot`). Do not run any workflow.
 - If `$ARGUMENTS` starts with `new` → follow `workflows/new.md`.
 - If `$ARGUMENTS` starts with `reboot` → follow `workflows/reboot.md`.
 - If `$ARGUMENTS` starts with `session-update` → follow `workflows/session-update.md`.
-- Otherwise (empty, or any unrecognized argument) → infer the workflow from conversation context, or ask the user which one they want.
+- If `$ARGUMENTS` starts with `sync-agents` → follow `workflows/sync-agents.md`.
+- Otherwise (empty, or any unrecognized argument) → this is not a request to run `new`, `reboot`, `session-update`, or `sync-agents`. Follow the Startup protocol to load `.nora/*` context, then continue the conversation normally: if `$ARGUMENTS` has text, treat it as the user's actual request evaluated against that loaded context (e.g. deciding what to do next, discussing a design change); if empty, summarize the current state and ask what they want to do. Do not run one of the four named workflows unless the user's request clearly calls for it or they explicitly name one.
 
 ## Core principles
 
@@ -76,7 +78,7 @@ Use these labels:
 
 ## Output requirements
 
-For project lifecycle tasks, always end with:
+For the `new`, `reboot`, and `session-update` workflows, always end with:
 
 ``` markdown
 ## Proposed Nora updates
