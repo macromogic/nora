@@ -6,15 +6,11 @@ TODO: One-sentence description of the project.
 
 ## Current situation
 
-This project is being rebooted after a period of inactivity. The immediate goal is to recover context, inspect existing artifacts, and define the next smallest useful action.
+TODO: Filled in by whichever workflow initialized this project — `new` (starting from scratch) or `reboot` (recovering a stale project).
 
 ## Current priorities
 
-- Recover project context.
-- Identify existing artifacts.
-- Classify work as done / partial / stale / missing / obsolete.
-- Avoid expanding scope before reconstructing the current state.
-- End each session with clear next actions.
+- TODO
 
 ## Agent startup instruction
 

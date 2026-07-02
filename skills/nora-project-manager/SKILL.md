@@ -1,6 +1,6 @@
 ---
 name: nora-project-manager
-description: Recover, maintain, and update research project state across agent sessions. Use this skill when rebooting a stale research project, tracking progress, or preparing session state updates.
+description: Start, recover, maintain, and update research project state across agent sessions. Use this skill when starting a brand-new research project, rebooting a stale one, tracking progress, or preparing session state updates.
 ---
 
 # Nora Project Lifecycle
@@ -9,14 +9,23 @@ description: Recover, maintain, and update research project state across agent s
 
 Help maintain research project continuity across sessions by reading local `.nora/` state files, reconstructing project status, identifying blockers, and proposing concrete next actions.
 
-This skill currently supports two workflows:
+This skill currently supports three workflows:
 
+- `new`: bootstrap a brand-new project with no prior state
 - `reboot`: recover a stale or long-inactive project
 - `session-update`: summarize the current session and propose project state updates
 
+## Precondition: Nora state must exist
+
+Before running any workflow, check whether `.nora/` exists in the current project.
+
+- If it does not exist, ask the user whether you should run `nora init` to create the file skeleton first. Do not proceed with a workflow, and do not create `.nora/*` files yourself, until the user answers.
+- If the user agrees, run `nora init`, then continue with the requested workflow.
+
 ## Argument routing
 
-- If `$ARGUMENTS` is `help` → print this skill's usage: the supported workflows (`reboot`, `session-update`) and their invocation form (e.g. `/nora-project-manager reboot`). Do not run any workflow.
+- If `$ARGUMENTS` is `help` → print this skill's usage: the supported workflows (`new`, `reboot`, `session-update`) and their invocation form (e.g. `/nora-project-manager reboot`). Do not run any workflow.
+- If `$ARGUMENTS` starts with `new` → follow `workflows/new.md`.
 - If `$ARGUMENTS` starts with `reboot` → follow `workflows/reboot.md`.
 - If `$ARGUMENTS` starts with `session-update` → follow `workflows/session-update.md`.
 - Otherwise (empty, or any unrecognized argument) → infer the workflow from conversation context, or ask the user which one they want.

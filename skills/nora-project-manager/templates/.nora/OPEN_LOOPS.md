@@ -22,4 +22,4 @@
 
 - Who is involved?
 - What is the next realistic milestone?
-- What caused the project to stall?
+- What could stall this project, and how would we know?
