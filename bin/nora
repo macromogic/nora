@@ -10,11 +10,16 @@ case "$cmd" in
     cat <<'EOF'
 Nora — personal research workflow system
 
-Commands:
-  nora init           Initialize Nora state in the current project
-  nora doctor         Check whether the current project has Nora state files
-  nora install-skill  Symlink the nora-project-manager skill into Claude Code / Codex
-  nora update         Pull the latest nora CLI and skills from git
+Core commands:
+  nora new             Initialize core Nora project state in the current project (alias: nora init)
+  nora doctor          Check global install + core project state + optional module status
+  nora install-skills  Symlink all Nora skills into Claude Code / Codex (alias: nora install-skill)
+  nora update          Pull the latest nora CLI and skills from git
+
+Optional module commands (each module is off until explicitly enabled):
+  nora citation init|check|doctor    Citation/BibTeX audit module (run 'nora citation help')
+  nora literature init|doctor        Literature tracking module (run 'nora literature help')
+  nora writing init|doctor           Writing assistant module (run 'nora writing help')
 EOF
     ;;
 
@@ -42,41 +47,51 @@ EOF
     fi
     ;;
 
-  install-skill)
-    src="$NORA_HOME/skills/nora-project-manager"
-
-    if [ ! -d "$src" ]; then
-      echo "Skill source not found: $src"
-      exit 1
-    fi
-
+  install-skill|install-skills)
     installed_any=0
 
-    if [ -d "$HOME/.claude" ]; then
-      mkdir -p "$HOME/.claude/skills"
-      ln -sfn "$src" "$HOME/.claude/skills/nora-project-manager"
-      ln -sfn "$src" "$HOME/.claude/skills/nora"
-      echo "Installed for Claude Code: $HOME/.claude/skills/nora-project-manager (alias: /nora)"
-      installed_any=1
-    fi
+    for skill in nora-project-manager nora-citation-auditor nora-literature-manager nora-writing-assistant; do
+      src="$NORA_HOME/skills/$skill"
 
-    if [ -d "$HOME/.codex" ]; then
-      mkdir -p "$HOME/.codex/skills"
-      ln -sfn "$src" "$HOME/.codex/skills/nora-project-manager"
-      ln -sfn "$src" "$HOME/.codex/skills/nora"
-      echo "Installed for Codex: $HOME/.codex/skills/nora-project-manager (alias: nora)"
-      installed_any=1
-    fi
+      if [ ! -d "$src" ]; then
+        echo "Skill source not found: $src"
+        continue
+      fi
+
+      if [ -d "$HOME/.claude" ]; then
+        mkdir -p "$HOME/.claude/skills"
+        ln -sfn "$src" "$HOME/.claude/skills/$skill"
+        echo "Installed for Claude Code: $HOME/.claude/skills/$skill"
+        installed_any=1
+      fi
+
+      if [ -d "$HOME/.codex" ]; then
+        mkdir -p "$HOME/.codex/skills"
+        ln -sfn "$src" "$HOME/.codex/skills/$skill"
+        echo "Installed for Codex: $HOME/.codex/skills/$skill"
+        installed_any=1
+      fi
+    done
+
+    for base in "$HOME/.claude" "$HOME/.codex"; do
+      if [ -d "$base" ]; then
+        ln -sfn "$NORA_HOME/skills/nora-project-manager" "$base/skills/nora"
+        ln -sfn "$NORA_HOME/skills/nora-citation-auditor" "$base/skills/nora-citation"
+        ln -sfn "$NORA_HOME/skills/nora-literature-manager" "$base/skills/nora-literature"
+        ln -sfn "$NORA_HOME/skills/nora-writing-assistant" "$base/skills/nora-writing"
+        echo "Aliases in $base/skills: nora, nora-citation, nora-literature, nora-writing"
+      fi
+    done
 
     if [ "$installed_any" -eq 0 ]; then
       echo "No ~/.claude or ~/.codex directory found. Nothing installed."
       exit 1
     fi
 
-    echo "Restart your agent session to pick up the new skill."
+    echo "Restart your agent session to pick up the new skill(s)."
     ;;
 
-  init)
+  new|init)
     if [ -d ".nora" ]; then
       echo "Nora state already exists: .nora/"
       exit 0
@@ -87,36 +102,396 @@ EOF
     cp "$NORA_HOME/skills/nora-project-manager/templates/AGENTS.md" ./AGENTS.md
     cp -r "$NORA_HOME/skills/nora-project-manager/templates/.nora/"* ./.nora/
 
-    echo "Initialized Nora project state in:"
+    echo "Initialized core Nora project state in:"
     echo "  $(pwd)/.nora"
+    echo
+    echo "Optional modules are not enabled. Run any of the following if needed:"
+    echo "  nora citation init"
+    echo "  nora literature init"
+    echo "  nora writing init"
     ;;
 
   doctor)
-    echo "Checking Nora project state..."
+    doctor_error=0
 
-    missing=0
+    echo "=== Global Nora installation ==="
 
-    for f in \
-      ".nora/PROJECT_STATE.yaml" \
-      ".nora/CONTEXT_BRIEF.md" \
-      ".nora/SESSION_LOG.md" \
-      ".nora/NEXT_ACTIONS.md" \
-      ".nora/OPEN_LOOPS.md"
-    do
-      if [ -f "$f" ]; then
-        echo "OK: $f"
+    if [ -d "$NORA_HOME" ]; then
+      echo "OK: NORA_HOME exists ($NORA_HOME)"
+    else
+      echo "ERROR: NORA_HOME not found ($NORA_HOME)"
+      doctor_error=1
+    fi
+
+    for skill in nora-project-manager nora-citation-auditor nora-literature-manager nora-writing-assistant; do
+      skill_dir="$NORA_HOME/skills/$skill"
+
+      if [ -d "$skill_dir" ]; then
+        echo "OK: skill present: $skill"
+        if [ -f "$skill_dir/SKILL.md" ]; then
+          echo "OK: $skill/SKILL.md"
+        else
+          echo "ERROR: $skill/SKILL.md missing"
+          doctor_error=1
+        fi
       else
-        echo "MISSING: $f"
-        missing=1
+        echo "ERROR: skill missing: $skill_dir"
+        doctor_error=1
       fi
     done
 
-    if [ "$missing" -eq 0 ]; then
-      echo "Nora project state looks OK."
+    for base in "$HOME/.claude" "$HOME/.codex"; do
+      if [ -d "$base" ]; then
+        for skill in nora-project-manager nora-citation-auditor nora-literature-manager nora-writing-assistant; do
+          link="$base/skills/$skill"
+
+          if [ -L "$link" ]; then
+            if [ -e "$link" ]; then
+              echo "OK: $link"
+            else
+              echo "ERROR: broken symlink: $link"
+              doctor_error=1
+            fi
+          elif [ -e "$link" ]; then
+            echo "OK: $link (not a symlink)"
+          else
+            echo "INFO: not installed: $link (run 'nora install-skills')"
+          fi
+        done
+      fi
+    done
+
+    echo
+    echo "=== Project core state ==="
+
+    if [ -d ".nora" ]; then
+      for f in \
+        "AGENTS.md" \
+        ".nora/PROJECT_STATE.yaml" \
+        ".nora/CONTEXT_BRIEF.md" \
+        ".nora/SESSION_LOG.md" \
+        ".nora/NEXT_ACTIONS.md" \
+        ".nora/OPEN_LOOPS.md"
+      do
+        if [ -f "$f" ]; then
+          echo "OK: $f"
+        else
+          echo "ERROR: missing: $f"
+          doctor_error=1
+        fi
+      done
+
+      echo
+      echo "=== Optional modules ==="
+
+      if [ -d ".nora/citation" ]; then
+        for f in \
+          ".nora/citation/CITATION_AUDIT_REPORT.md" \
+          ".nora/citation/CITATION_REVIEW_QUEUE.yaml" \
+          ".nora/citation/CLAIM_SUPPORT_AUDIT.md"
+        do
+          if [ -f "$f" ]; then
+            echo "OK: $f"
+          else
+            echo "WARNING: $f missing (citation module initialized but incomplete)"
+          fi
+        done
+      else
+        echo "INFO: citation module not initialized. Run 'nora citation init' if needed."
+      fi
+
+      if [ -d ".nora/literature" ]; then
+        for f in \
+          ".nora/literature/LITERATURE_LOG.md" \
+          ".nora/literature/READING_QUEUE.md" \
+          ".nora/literature/RELATED_WORK_MAP.md"
+        do
+          if [ -f "$f" ]; then
+            echo "OK: $f"
+          else
+            echo "WARNING: $f missing (literature module initialized but incomplete)"
+          fi
+        done
+        if [ -d ".nora/literature/PAPER_NOTES" ]; then
+          echo "OK: .nora/literature/PAPER_NOTES/"
+        else
+          echo "WARNING: .nora/literature/PAPER_NOTES/ missing (literature module initialized but incomplete)"
+        fi
+      else
+        echo "INFO: literature module not initialized. Run 'nora literature init' if needed."
+      fi
+
+      if [ -d ".nora/writing" ]; then
+        for f in \
+          ".nora/writing/WRITING_STYLE.md" \
+          ".nora/writing/STYLE_NOTES.md" \
+          ".nora/writing/PHRASE_BANK.md"
+        do
+          if [ -f "$f" ]; then
+            echo "OK: $f"
+          else
+            echo "WARNING: $f missing (writing module initialized but incomplete)"
+          fi
+        done
+      else
+        echo "INFO: writing module not initialized. Run 'nora writing init' if needed."
+      fi
     else
-      echo "Some Nora files are missing."
+      echo "Not in a Nora-managed project directory (no .nora/ found here)."
+      echo "Skipping project core state and optional module checks."
+    fi
+
+    echo
+    if [ "$doctor_error" -eq 0 ]; then
+      echo "Nora doctor: no errors. See INFO/WARNING lines above for optional-module status."
+    else
+      echo "Nora doctor found errors. See ERROR lines above."
       exit 1
     fi
+    ;;
+
+  citation)
+    subcmd="${2:-help}"
+
+    case "$subcmd" in
+      init)
+        if [ -d ".nora/citation" ]; then
+          echo "Citation audit state already exists: .nora/citation/"
+          exit 0
+        fi
+
+        mkdir -p .nora/citation
+        cp -r "$NORA_HOME/skills/nora-citation-auditor/templates/citation/"* ./.nora/citation/
+
+        if [ ! -f ".nora/PROJECT_STATE.yaml" ]; then
+          echo "Note: no full Nora project state found (.nora/PROJECT_STATE.yaml missing)."
+          echo "Initialized citation-audit-only (standalone) state in:"
+        else
+          echo "Initialized citation audit state in:"
+        fi
+        echo "  $(pwd)/.nora/citation"
+        ;;
+
+      check)
+        cat <<'EOF'
+'nora citation check' is agent-driven, not a standalone script.
+
+In your agent session, run the nora-citation-auditor skill:
+  /nora-citation-auditor check-bibtex
+  /nora-citation-auditor check-latex-citations
+  /nora-citation-auditor report
+  /nora-citation-auditor audit-claim-support
+
+Or, if installed, the short alias:
+  /nora-citation check-bibtex
+EOF
+        ;;
+
+      doctor)
+        if [ ! -d ".nora/citation" ]; then
+          echo "ERROR: .nora/citation/ not found."
+          echo "Run 'nora citation init' first."
+          exit 1
+        fi
+
+        echo "Checking citation audit state..."
+
+        missing=0
+
+        for f in \
+          ".nora/citation/CITATION_AUDIT_REPORT.md" \
+          ".nora/citation/CITATION_REVIEW_QUEUE.yaml" \
+          ".nora/citation/CLAIM_SUPPORT_AUDIT.md"
+        do
+          if [ -f "$f" ]; then
+            echo "OK: $f"
+          else
+            echo "MISSING: $f"
+            missing=1
+          fi
+        done
+
+        if [ "$missing" -eq 0 ]; then
+          echo "Citation audit state looks OK."
+        else
+          echo "Citation module is initialized but incomplete."
+          exit 1
+        fi
+        ;;
+
+      help|*)
+        cat <<'EOF'
+Nora citation auditor
+
+Commands:
+  nora citation init    Create .nora/citation/ skeleton in the current project
+  nora citation check   Show how to run the citation audit (agent-driven, via the nora-citation-auditor skill)
+  nora citation doctor  Check whether citation module files exist (fails if .nora/citation/ is missing)
+
+This module is primarily skill-driven. In your agent session, run:
+  /nora-citation-auditor check-bibtex
+  /nora-citation-auditor check-latex-citations
+  /nora-citation-auditor report
+  /nora-citation-auditor audit-claim-support
+EOF
+        ;;
+    esac
+    ;;
+
+  literature)
+    subcmd="${2:-help}"
+
+    case "$subcmd" in
+      init)
+        if [ -d ".nora/literature" ]; then
+          echo "Literature state already exists: .nora/literature/"
+          exit 0
+        fi
+
+        mkdir -p .nora/literature/PAPER_NOTES
+        cp "$NORA_HOME/skills/nora-literature-manager/templates/literature/LITERATURE_LOG.md" ./.nora/literature/
+        cp "$NORA_HOME/skills/nora-literature-manager/templates/literature/READING_QUEUE.md" ./.nora/literature/
+        cp "$NORA_HOME/skills/nora-literature-manager/templates/literature/RELATED_WORK_MAP.md" ./.nora/literature/
+        cp "$NORA_HOME/skills/nora-literature-manager/templates/literature/PAPER_NOTES/.gitkeep" ./.nora/literature/PAPER_NOTES/
+
+        if [ ! -f ".nora/PROJECT_STATE.yaml" ]; then
+          echo "Note: no full Nora project state found (.nora/PROJECT_STATE.yaml missing)."
+          echo "Initialized literature-only (standalone) state in:"
+        else
+          echo "Initialized literature state in:"
+        fi
+        echo "  $(pwd)/.nora/literature"
+        ;;
+
+      doctor)
+        if [ ! -d ".nora/literature" ]; then
+          echo "ERROR: .nora/literature/ not found."
+          echo "Run 'nora literature init' first."
+          exit 1
+        fi
+
+        echo "Checking literature state..."
+
+        missing=0
+
+        for f in \
+          ".nora/literature/LITERATURE_LOG.md" \
+          ".nora/literature/READING_QUEUE.md" \
+          ".nora/literature/RELATED_WORK_MAP.md"
+        do
+          if [ -f "$f" ]; then
+            echo "OK: $f"
+          else
+            echo "MISSING: $f"
+            missing=1
+          fi
+        done
+
+        if [ -d ".nora/literature/PAPER_NOTES" ]; then
+          echo "OK: .nora/literature/PAPER_NOTES/"
+        else
+          echo "MISSING: .nora/literature/PAPER_NOTES/"
+          missing=1
+        fi
+
+        if [ "$missing" -eq 0 ]; then
+          echo "Literature state looks OK."
+        else
+          echo "Literature module is initialized but incomplete."
+          exit 1
+        fi
+        ;;
+
+      help|*)
+        cat <<'EOF'
+Nora literature manager
+
+Commands:
+  nora literature init    Create .nora/literature/ skeleton in the current project
+  nora literature doctor  Check whether literature module files exist (fails if .nora/literature/ is missing)
+
+This module is primarily skill-driven. In your agent session, run:
+  /nora-literature-manager search
+  /nora-literature-manager triage
+  /nora-literature-manager reading-queue
+  /nora-literature-manager paper-note
+  /nora-literature-manager related-work-map
+EOF
+        ;;
+    esac
+    ;;
+
+  writing)
+    subcmd="${2:-help}"
+
+    case "$subcmd" in
+      init)
+        if [ -d ".nora/writing" ]; then
+          echo "Writing state already exists: .nora/writing/"
+          exit 0
+        fi
+
+        mkdir -p .nora/writing
+        cp -r "$NORA_HOME/skills/nora-writing-assistant/templates/writing/"* ./.nora/writing/
+
+        if [ ! -f ".nora/PROJECT_STATE.yaml" ]; then
+          echo "Note: no full Nora project state found (.nora/PROJECT_STATE.yaml missing)."
+          echo "Initialized writing-only (standalone) state in:"
+        else
+          echo "Initialized writing state in:"
+        fi
+        echo "  $(pwd)/.nora/writing"
+        ;;
+
+      doctor)
+        if [ ! -d ".nora/writing" ]; then
+          echo "ERROR: .nora/writing/ not found."
+          echo "Run 'nora writing init' first."
+          exit 1
+        fi
+
+        echo "Checking writing state..."
+
+        missing=0
+
+        for f in \
+          ".nora/writing/WRITING_STYLE.md" \
+          ".nora/writing/STYLE_NOTES.md" \
+          ".nora/writing/PHRASE_BANK.md"
+        do
+          if [ -f "$f" ]; then
+            echo "OK: $f"
+          else
+            echo "MISSING: $f"
+            missing=1
+          fi
+        done
+
+        if [ "$missing" -eq 0 ]; then
+          echo "Writing state looks OK."
+        else
+          echo "Writing module is initialized but incomplete."
+          exit 1
+        fi
+        ;;
+
+      help|*)
+        cat <<'EOF'
+Nora writing assistant
+
+Commands:
+  nora writing init    Create .nora/writing/ skeleton in the current project
+  nora writing doctor  Check whether writing module files exist (fails if .nora/writing/ is missing)
+
+This module is primarily skill-driven. In your agent session, run:
+  /nora-writing-assistant polish
+  /nora-writing-assistant restructure
+  /nora-writing-assistant overclaim-check
+  /nora-writing-assistant paragraph-diagnosis
+  /nora-writing-assistant style-profile
+EOF
+        ;;
+    esac
     ;;
 
   *)

@@ -1,0 +1,28 @@
+# Citation Review Queue
+#
+# Append-only. Each entry represents one finding from a nora-citation-auditor
+# workflow. Do not delete or renumber existing entries — mark them resolved
+# instead. This file is never auto-applied; every entry requires human review
+# before any .bib/.tex change is made.
+#
+# status: one of AUTO_SAFE, REVIEW_REQUIRED, BLOCKED, DO_NOT_APPLY
+#   (AUTO_SAFE describes confidence in the finding, not permission to auto-fix —
+#   this skill never edits .bib or .tex files.)
+
+entries: []
+
+# Example entry (for reference only — remove before the first real append):
+#
+# entries:
+#   - id: "2026-07-02-001"
+#     type: "duplicate_key"          # duplicate_key | duplicate_doi | missing_field |
+#                                     # missing_citation | unused_entry | duplicate_title |
+#                                     # arxiv_journal_duplicate
+#     status: "REVIEW_REQUIRED"
+#     keys: ["smith2020foo", "smith2020foo_dup"]
+#     locations: ["refs.bib:42", "refs.bib:88"]
+#     description: "Same citation key defined twice with different fields."
+#     suggested_action: "Confirm which entry is canonical; manually remove the other."
+#     detected: "2026-07-02"
+#     resolved: false
+#     resolution_note: null
