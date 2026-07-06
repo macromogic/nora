@@ -3,3 +3,5 @@
 .nora
 .env
 AGENTS.md
+.cc-history/
+__pycache__/

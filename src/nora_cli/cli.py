@@ -1,0 +1,450 @@
+"""Nora CLI. Behavioral parity with the original bash bin/nora (0.1.0).
+
+Deterministic scaffolding only: init/doctor/install/update. Agent-driven
+work lives in the skills; this module must never write into .bib/.tex or
+agent-owned state files.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+SKILLS = [
+    "nora-project-manager",
+    "nora-citation-auditor",
+    "nora-literature-manager",
+    "nora-writing-assistant",
+]
+
+SKILL_ALIASES = {
+    "nora": "nora-project-manager",
+    "nora-citation": "nora-citation-auditor",
+    "nora-literature": "nora-literature-manager",
+    "nora-writing": "nora-writing-assistant",
+}
+
+CORE_FILES = [
+    "AGENTS.md",
+    ".nora/PROJECT_STATE.yaml",
+    ".nora/CONTEXT_BRIEF.md",
+    ".nora/SESSION_LOG.md",
+    ".nora/NEXT_ACTIONS.md",
+    ".nora/OPEN_LOOPS.md",
+]
+
+MODULES = {
+    "citation": {
+        "files": [
+            ".nora/citation/CITATION_AUDIT_REPORT.md",
+            ".nora/citation/CITATION_REVIEW_QUEUE.yaml",
+            ".nora/citation/CLAIM_SUPPORT_AUDIT.md",
+        ],
+        "dirs": [],
+        "state_name": "Citation audit",
+        "doctor_intro": "Checking citation audit state...",
+        "doctor_ok": "Citation audit state looks OK.",
+        "doctor_incomplete": "Citation module is initialized but incomplete.",
+    },
+    "literature": {
+        "files": [
+            ".nora/literature/LITERATURE_LOG.md",
+            ".nora/literature/READING_QUEUE.md",
+            ".nora/literature/RELATED_WORK_MAP.md",
+        ],
+        "dirs": [".nora/literature/PAPER_NOTES"],
+        "state_name": "Literature",
+        "doctor_intro": "Checking literature state...",
+        "doctor_ok": "Literature state looks OK.",
+        "doctor_incomplete": "Literature module is initialized but incomplete.",
+    },
+    "writing": {
+        "files": [
+            ".nora/writing/WRITING_STYLE.md",
+            ".nora/writing/STYLE_NOTES.md",
+            ".nora/writing/PHRASE_BANK.md",
+        ],
+        "dirs": [],
+        "state_name": "Writing",
+        "doctor_intro": "Checking writing state...",
+        "doctor_ok": "Writing state looks OK.",
+        "doctor_incomplete": "Writing module is initialized but incomplete.",
+    },
+}
+
+HELP_TEXT = """\
+Nora — personal research workflow system
+
+Core commands:
+  nora new             Initialize core Nora project state in the current project (alias: nora init)
+  nora doctor          Check global install + core project state + optional module status
+  nora install-skills  Symlink all Nora skills into Claude Code / Codex (alias: nora install-skill)
+  nora update          Pull the latest nora CLI and skills from git
+
+Optional module commands (each module is off until explicitly enabled):
+  nora citation init|check|doctor    Citation/BibTeX audit module (run 'nora citation help')
+  nora literature init|doctor        Literature tracking module (run 'nora literature help')
+  nora writing init|doctor           Writing assistant module (run 'nora writing help')"""
+
+CITATION_CHECK_TEXT = """\
+'nora citation check' is agent-driven, not a standalone script.
+
+In your agent session, run the nora-citation-auditor skill:
+  /nora-citation-auditor check-bibtex
+  /nora-citation-auditor check-latex-citations
+  /nora-citation-auditor report
+  /nora-citation-auditor audit-claim-support
+
+Or, if installed, the short alias:
+  /nora-citation check-bibtex"""
+
+MODULE_HELP = {
+    "citation": """\
+Nora citation auditor
+
+Commands:
+  nora citation init    Create .nora/citation/ skeleton in the current project
+  nora citation check   Show how to run the citation audit (agent-driven, via the nora-citation-auditor skill)
+  nora citation doctor  Check whether citation module files exist (fails if .nora/citation/ is missing)
+
+This module is primarily skill-driven. In your agent session, run:
+  /nora-citation-auditor check-bibtex
+  /nora-citation-auditor check-latex-citations
+  /nora-citation-auditor report
+  /nora-citation-auditor audit-claim-support""",
+    "literature": """\
+Nora literature manager
+
+Commands:
+  nora literature init    Create .nora/literature/ skeleton in the current project
+  nora literature doctor  Check whether literature module files exist (fails if .nora/literature/ is missing)
+
+This module is primarily skill-driven. In your agent session, run:
+  /nora-literature-manager search
+  /nora-literature-manager triage
+  /nora-literature-manager reading-queue
+  /nora-literature-manager paper-note
+  /nora-literature-manager related-work-map""",
+    "writing": """\
+Nora writing assistant
+
+Commands:
+  nora writing init    Create .nora/writing/ skeleton in the current project
+  nora writing doctor  Check whether writing module files exist (fails if .nora/writing/ is missing)
+
+This module is primarily skill-driven. In your agent session, run:
+  /nora-writing-assistant polish
+  /nora-writing-assistant restructure
+  /nora-writing-assistant overclaim-check
+  /nora-writing-assistant paragraph-diagnosis
+  /nora-writing-assistant style-profile""",
+}
+
+
+def nora_home() -> Path:
+    return Path(os.environ.get("NORA_HOME") or Path.home() / "nora")
+
+
+def agent_bases() -> list[Path]:
+    return [Path.home() / ".claude", Path.home() / ".codex"]
+
+
+def _symlink_force(src: Path, dest: Path) -> None:
+    if dest.is_symlink() or dest.exists():
+        if dest.is_dir() and not dest.is_symlink():
+            shutil.rmtree(dest)
+        else:
+            dest.unlink()
+    dest.symlink_to(src)
+
+
+def cmd_help() -> int:
+    print(HELP_TEXT)
+    return 0
+
+
+def cmd_update() -> int:
+    home = nora_home()
+
+    if not (home / ".git").is_dir():
+        print(f"NORA_HOME is not a git repository: {home}")
+        return 1
+
+    status = subprocess.run(
+        ["git", "-C", str(home), "status", "--porcelain"],
+        capture_output=True, text=True, check=True,
+    )
+    if status.stdout.strip():
+        print(f"NORA_HOME has uncommitted changes, refusing to update: {home}")
+        return 1
+
+    agents_template = "skills/nora-project-manager/templates/AGENTS.md"
+
+    def template_head() -> str:
+        return subprocess.run(
+            ["git", "-C", str(home), "log", "-1", "--format=%H", "--", agents_template],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    before = template_head()
+    pull = subprocess.run(["git", "-C", str(home), "pull", "--ff-only"])
+    if pull.returncode != 0:
+        return pull.returncode
+    after = template_head()
+
+    if before != after:
+        print(f"Note: {agents_template} changed.")
+        print("Run '/nora sync-agents' in your agent session for any already-initialized project you want to sync.")
+    return 0
+
+
+def cmd_install_skills() -> int:
+    home = nora_home()
+    installed_any = False
+
+    for skill in SKILLS:
+        src = home / "skills" / skill
+
+        if not src.is_dir():
+            print(f"Skill source not found: {src}")
+            continue
+
+        for base, label in [(agent_bases()[0], "Claude Code"), (agent_bases()[1], "Codex")]:
+            if base.is_dir():
+                skills_dir = base / "skills"
+                skills_dir.mkdir(parents=True, exist_ok=True)
+                _symlink_force(src, skills_dir / skill)
+                print(f"Installed for {label}: {skills_dir / skill}")
+                installed_any = True
+
+    for base in agent_bases():
+        if base.is_dir():
+            for alias, skill in SKILL_ALIASES.items():
+                _symlink_force(home / "skills" / skill, base / "skills" / alias)
+            print(f"Aliases in {base / 'skills'}: nora, nora-citation, nora-literature, nora-writing")
+
+    if not installed_any:
+        print("No ~/.claude or ~/.codex directory found. Nothing installed.")
+        return 1
+
+    print("Restart your agent session to pick up the new skill(s).")
+    return 0
+
+
+def cmd_new() -> int:
+    if Path(".nora").is_dir():
+        print("Nora state already exists: .nora/")
+        return 0
+
+    home = nora_home()
+    templates = home / "skills" / "nora-project-manager" / "templates"
+
+    Path(".nora").mkdir(parents=True)
+    shutil.copy(templates / "AGENTS.md", Path("AGENTS.md"))
+    for item in (templates / ".nora").iterdir():
+        if item.is_file():
+            shutil.copy(item, Path(".nora") / item.name)
+        else:
+            shutil.copytree(item, Path(".nora") / item.name)
+
+    print("Initialized core Nora project state in:")
+    print(f"  {Path.cwd() / '.nora'}")
+    print()
+    print("Optional modules are not enabled. Run any of the following if needed:")
+    print("  nora citation init")
+    print("  nora literature init")
+    print("  nora writing init")
+    return 0
+
+
+def cmd_doctor() -> int:
+    home = nora_home()
+    error = False
+
+    print("=== Global Nora installation ===")
+
+    if home.is_dir():
+        print(f"OK: NORA_HOME exists ({home})")
+    else:
+        print(f"ERROR: NORA_HOME not found ({home})")
+        error = True
+
+    for skill in SKILLS:
+        skill_dir = home / "skills" / skill
+        if skill_dir.is_dir():
+            print(f"OK: skill present: {skill}")
+            if (skill_dir / "SKILL.md").is_file():
+                print(f"OK: {skill}/SKILL.md")
+            else:
+                print(f"ERROR: {skill}/SKILL.md missing")
+                error = True
+        else:
+            print(f"ERROR: skill missing: {skill_dir}")
+            error = True
+
+    for base in agent_bases():
+        if base.is_dir():
+            for skill in SKILLS:
+                link = base / "skills" / skill
+                if link.is_symlink():
+                    if link.exists():
+                        print(f"OK: {link}")
+                    else:
+                        print(f"ERROR: broken symlink: {link}")
+                        error = True
+                elif link.exists():
+                    print(f"OK: {link} (not a symlink)")
+                else:
+                    print(f"INFO: not installed: {link} (run 'nora install-skills')")
+
+    print()
+    print("=== Project core state ===")
+
+    if Path(".nora").is_dir():
+        for f in CORE_FILES:
+            if Path(f).is_file():
+                print(f"OK: {f}")
+            else:
+                print(f"ERROR: missing: {f}")
+                error = True
+
+        print()
+        print("=== Optional modules ===")
+
+        for name, mod in MODULES.items():
+            mod_dir = Path(".nora") / name
+            if mod_dir.is_dir():
+                for f in mod["files"]:
+                    if Path(f).is_file():
+                        print(f"OK: {f}")
+                    else:
+                        print(f"WARNING: {f} missing ({name} module initialized but incomplete)")
+                for d in mod["dirs"]:
+                    if Path(d).is_dir():
+                        print(f"OK: {d}/")
+                    else:
+                        print(f"WARNING: {d}/ missing ({name} module initialized but incomplete)")
+            else:
+                print(f"INFO: {name} module not initialized. Run 'nora {name} init' if needed.")
+    else:
+        print("Not in a Nora-managed project directory (no .nora/ found here).")
+        print("Skipping project core state and optional module checks.")
+
+    print()
+    if not error:
+        print("Nora doctor: no errors. See INFO/WARNING lines above for optional-module status.")
+        return 0
+    print("Nora doctor found errors. See ERROR lines above.")
+    return 1
+
+
+def _module_init(name: str) -> int:
+    home = nora_home()
+    mod = MODULES[name]
+    mod_dir = Path(".nora") / name
+
+    if mod_dir.is_dir():
+        print(f"{mod['state_name']} state already exists: .nora/{name}/")
+        return 0
+
+    if name == "citation":
+        mod_dir.mkdir(parents=True)
+        src = home / "skills" / "nora-citation-auditor" / "templates" / "citation"
+        for item in src.iterdir():
+            shutil.copy(item, mod_dir / item.name)
+    elif name == "literature":
+        (mod_dir / "PAPER_NOTES").mkdir(parents=True)
+        src = home / "skills" / "nora-literature-manager" / "templates" / "literature"
+        for fname in ["LITERATURE_LOG.md", "READING_QUEUE.md", "RELATED_WORK_MAP.md"]:
+            shutil.copy(src / fname, mod_dir / fname)
+        shutil.copy(src / "PAPER_NOTES" / ".gitkeep", mod_dir / "PAPER_NOTES" / ".gitkeep")
+    else:  # writing
+        mod_dir.mkdir(parents=True)
+        src = home / "skills" / "nora-writing-assistant" / "templates" / "writing"
+        for item in src.iterdir():
+            shutil.copy(item, mod_dir / item.name)
+
+    if not Path(".nora/PROJECT_STATE.yaml").is_file():
+        print("Note: no full Nora project state found (.nora/PROJECT_STATE.yaml missing).")
+        print(f"Initialized {name}-audit-only (standalone) state in:" if name == "citation"
+              else f"Initialized {name}-only (standalone) state in:")
+    else:
+        print(f"Initialized {name} audit state in:" if name == "citation"
+              else f"Initialized {name} state in:")
+    print(f"  {Path.cwd() / '.nora' / name}")
+    return 0
+
+
+def _module_doctor(name: str) -> int:
+    mod = MODULES[name]
+    mod_dir = Path(".nora") / name
+
+    if not mod_dir.is_dir():
+        print(f"ERROR: .nora/{name}/ not found.")
+        print(f"Run 'nora {name} init' first.")
+        return 1
+
+    print(mod["doctor_intro"])
+
+    missing = False
+    for f in mod["files"]:
+        if Path(f).is_file():
+            print(f"OK: {f}")
+        else:
+            print(f"MISSING: {f}")
+            missing = True
+    for d in mod["dirs"]:
+        if Path(d).is_dir():
+            print(f"OK: {d}/")
+        else:
+            print(f"MISSING: {d}/")
+            missing = True
+
+    if not missing:
+        print(mod["doctor_ok"])
+        return 0
+    print(mod["doctor_incomplete"])
+    return 1
+
+
+def cmd_module(name: str, subcmd: str) -> int:
+    if subcmd == "init":
+        return _module_init(name)
+    if subcmd == "doctor":
+        return _module_doctor(name)
+    if name == "citation" and subcmd == "check":
+        print(CITATION_CHECK_TEXT)
+        return 0
+    print(MODULE_HELP[name])
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    cmd = args[0] if args else "help"
+
+    if cmd == "help":
+        return cmd_help()
+    if cmd == "update":
+        return cmd_update()
+    if cmd in ("install-skill", "install-skills"):
+        return cmd_install_skills()
+    if cmd in ("new", "init"):
+        return cmd_new()
+    if cmd == "doctor":
+        return cmd_doctor()
+    if cmd in ("citation", "literature", "writing", "lit"):
+        name = "literature" if cmd == "lit" else cmd
+        subcmd = args[1] if len(args) > 1 else "help"
+        return cmd_module(name, subcmd)
+
+    print(f"Unknown command: {cmd}")
+    print("Run: nora help")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

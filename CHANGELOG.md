@@ -2,10 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.2.0] - 2026-07-06
+
+Alpha. Heads-up: the `.nora/literature/` layout will be redesigned in an
+upcoming version (structured `papers.yaml` state with generated Markdown
+views).
 
 ### Added
 
+- pytest test suite (`tests/test_cli.py`, 41 tests) covering the full CLI surface: doctor three tiers, init idempotency, install-skills symlinks/aliases, module init/doctor including failure paths, update refusal paths
+- `nora lit` accepted as a short alias for `nora literature`
 - `nora-citation-auditor` skill (short alias `/nora-citation`) with four workflows: `check-bibtex`, `check-latex-citations`, `report`, `audit-claim-support` — mechanical/semi-mechanical BibTeX and LaTeX citation auditing (duplicate keys/DOIs, missing fields, missing/unused citations, conservative fuzzy duplicate-title and arXiv/journal-duplicate candidates), plus a bounded human-in-the-loop claim-support review pass (`SUPPORTED`/`PARTIALLY_SUPPORTED`/`WEAK_OR_INDIRECT`/`UNSUPPORTED`/`REVIEW_REQUIRED`/`BLOCKED`). Never edits `.bib`/`.tex` files, never claims full scientific verification; uncertain findings go into a review queue instead.
 - `.nora/citation/` project-local output convention: `CITATION_AUDIT_REPORT.md`, `CITATION_REVIEW_QUEUE.yaml`, `CLAIM_SUPPORT_AUDIT.md`
 - `nora-literature-manager` skill (short alias `/nora-literature`) with five workflows: `search`, `triage`, `reading-queue`, `paper-note`, `related-work-map` — literature workflow management (not a search API client): works with web/search tools if available, or with manually supplied titles/DOIs/BibTeX/PDFs/notes if not. Distinguishes `candidate`/`screened`/`to-read`/`reading`/`read`/`cited`/`rejected`/`replaced` papers and records why each one matters.
@@ -17,11 +23,16 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- CLI rewritten from bash to Python (`src/nora_cli/`, Python 3.8+ stdlib only, verified by running the test suite under 3.8); the `bin/nora` launcher refuses to run on older interpreters with a clear error instead of a traceback; `bin/nora` is now a thin launcher. Output and exit codes verified byte-identical against the bash version across the full command matrix
 - `nora init` renamed to `nora new` (old name kept as an alias) to match the `new` workflow terminology and distinguish core project initialization from optional `nora <module> init` commands
 - `nora doctor` rewritten to distinguish three tiers: global Nora installation (home dir, required skills present with `SKILL.md`, skill symlinks not broken) — `ERROR` on failure; core project state (only checked when `.nora/` exists) — `ERROR` on missing file; optional modules (citation/literature/writing) — `INFO` if not initialized, `WARNING` if initialized but incomplete. Only `ERROR` causes a non-zero exit; an uninitialized optional module no longer fails `nora doctor`.
 - `nora install-skill` renamed to `nora install-skills` (old name kept as an alias); now installs all four skills plus aliases `nora`, `nora-citation`, `nora-literature`, `nora-writing`
 - `AGENTS.md` template now lists all four skills and when to use each, and warns not to assume a module is initialized just because the project uses Nora
 - README.md restructured with an alpha feature overview, a quick-start sequence, explicit optional-module documentation, standalone-usage examples, and a non-goals list
+
+### Removed
+
+- Empty `scripts/` and `shared/` directories: deterministic logic lives in the Python package after the migration
 
 ## [0.1.0] - 2026-07-02
 
