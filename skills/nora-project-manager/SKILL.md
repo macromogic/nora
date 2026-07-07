@@ -79,6 +79,16 @@ When working in a Nora-enabled project:
 
 `.nora/decisions/decisions.yaml` holds agent proposals. Append entries with `status: pending` when work produces state-changing suggestions (papers to read/cite, writing patches, experiment ideas). Only the user approves or rejects; never act on a pending proposal as if approved.
 
+## Related Nora skills
+
+This skill covers project state and session continuity. Other Nora skills cover optional, separately-initialized modules — use them when the relevant work comes up, not by default:
+
+- `nora-citation-auditor` — BibTeX hygiene, LaTeX citation checks, and claim-citation support review (`.nora/citation/`, enabled via `nora citation init`)
+- `nora-literature-manager` — literature search, triage, reading queues, and related-work maps (`.nora/literature/`, enabled via `nora literature init`)
+- `nora-writing-assistant` — polishing, restructuring, and overclaim checks for manuscript prose (`.nora/writing/`, enabled via `nora writing init`; also works standalone without any `.nora/` project)
+
+Do not assume a module is initialized just because the project uses Nora — check for `.nora/<module>/` (or run `nora doctor`) before using it, and ask before running `nora <module> init` if one is missing.
+
 ## HITL policy
 
 The agent may propose updates to Nora state files, but should not overwrite important project state unless the user explicitly asks.

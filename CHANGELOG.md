@@ -2,7 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.0] - 2026-07-07
+
+Alpha. Heads-up still applies: the `.nora/literature/` layout will be
+redesigned in the next iteration (structured `papers.yaml` state with
+generated Markdown views).
 
 ### Added
 
@@ -18,6 +22,7 @@ All notable changes to this project will be documented in this file.
 - `nora <module> init` and `nora <module> doctor` now resolve the workspace root first: running them from a subdirectory targets the workspace's `.nora/` instead of creating a nested one
 - `nora doctor` project checks now work from any subdirectory of a workspace
 - `nora-project-manager` skill startup protocol and precondition now start with `nora root` instead of checking `./.nora`
+- `nora-project-manager` SKILL.md now lists the other three Nora skills and their modules (previously only the `AGENTS.md` template did), so agents discover them in standalone setups without an `AGENTS.md`
 
 ## [0.2.0] - 2026-07-06
 
