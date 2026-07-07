@@ -4,12 +4,37 @@ This project uses Nora for research project state tracking.
 
 ## Startup protocol
 
-Before working on this project, read:
+Before working on this project:
 
-1. `.nora/CONTEXT_BRIEF.md`
-2. `.nora/PROJECT_STATE.yaml`
-3. `.nora/NEXT_ACTIONS.md`
-4. `.nora/OPEN_LOOPS.md`
+1. Run `nora root` to resolve the active workspace (the nearest ancestor with `.nora/`). Do not assume `./.nora` — you may be in a subdirectory, and sibling directories may have their own `.nora`.
+2. From the resolved workspace root, read:
+   - `.nora/CONTEXT_BRIEF.md`
+   - `.nora/PROJECT_STATE.yaml`
+   - `.nora/NEXT_ACTIONS.md`
+   - `.nora/OPEN_LOOPS.md`
+
+## Operating rules
+
+1. Prefer Nora CLI commands for state-changing operations; do not hand-build what a `nora` command already does.
+2. Work in exactly one workspace at a time. Sibling `.nora` directories are other workspaces of the same research project, not conflicts — never read or merge their state implicitly.
+3. Read compact state files and reports before raw logs or long files.
+4. Do not manually edit structured state when CLI support exists; propose changes when it does not.
+5. Do not create `.nora/` directories yourself — that is `nora new` / `nora <module> init`'s job, and nested `.nora` directories are conflicts.
+
+## Decision gate
+
+`.nora/decisions/decisions.yaml` is the decision gate. When your work produces something that changes research state — a paper worth reading, a citation to add, a substantive writing change, an experiment idea — append a proposal entry with `status: pending` instead of acting on it.
+
+- Only the user flips a proposal to `approved`/`rejected` (or explicitly tells you to).
+- Never act on a `pending` proposal as if it were approved.
+- Never promote papers, citations, writing changes, or research decisions to final states without an approved entry.
+
+## What requires explicit user approval
+
+- Promoting any `pending` decision.
+- Running `nora new` or any `nora <module> init`.
+- Overwriting or restructuring Nora state files (appending session updates is fine when asked).
+- Any edit to `.bib`/`.tex` beyond what the user asked for in this session.
 
 ## Preferred skills
 

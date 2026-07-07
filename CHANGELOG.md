@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `nora root` — resolves the active workspace (nearest ancestor with `.nora/`, stopping at `$HOME`/filesystem root) and prints its path plus identity from `config.yaml`. Agents/skills now run this before reading state instead of assuming `./.nora`.
+- `nora new` now also creates: `.nora/.gitignore` (containing `*` — Nora state stays out of git by default; sharing happens by explicit export), `.nora/config.yaml` (workspace identity: `project_id` derived from the directory name, `workspace_id`, `workspace_type`, `project_file`), and `.nora/decisions/decisions.yaml` (decision gate: agents append `pending` proposals; only the user approves/rejects)
+- `nora doctor` workspace layout checks: reports the resolved workspace and its identity; nested `.nora` inside the workspace = `WARNING` (real conflict); sibling workspaces next to it = `INFO` (not a conflict; scan skipped when the parent is `$HOME`); missing `config.yaml`/`.gitignore`/`decisions/` in pre-0.3 workspaces = `INFO`, never an error
+- `AGENTS.md` template: agent operating rules (resolve workspace via `nora root`, prefer CLI for state changes, one workspace at a time, never create `.nora/` by hand), decision-gate protocol, and an explicit list of actions requiring user approval
+- Chinese entry-point README (`README.zh-CN.md`) — a thin introduction linking to the full English README
+
+### Changed
+
+- `nora new` refuses to run inside an existing workspace (nested `.nora` directories conflict); exits 1 with an explanation
+- `nora <module> init` and `nora <module> doctor` now resolve the workspace root first: running them from a subdirectory targets the workspace's `.nora/` instead of creating a nested one
+- `nora doctor` project checks now work from any subdirectory of a workspace
+- `nora-project-manager` skill startup protocol and precondition now start with `nora root` instead of checking `./.nora`
+
 ## [0.2.0] - 2026-07-06
 
 Alpha. Heads-up: the `.nora/literature/` layout will be redesigned in an

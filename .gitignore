@@ -1,7 +1,7 @@
-.claude
-.codex
-.nora
-.env
-AGENTS.md
+/.claude
+/.codex
+/.nora
+/.env
+/AGENTS.md
 .cc-history/
 __pycache__/

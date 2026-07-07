@@ -1,0 +1,19 @@
+# Decision gate.
+#
+# Agents append proposals here with status: pending. Only the user flips a
+# proposal to approved/rejected (or explicitly instructs the agent to).
+# Agents must never act on a pending proposal as if it were approved, and
+# must never promote papers/citations/writing changes/experiments to final
+# states without an approved entry here.
+#
+# Entry format:
+# - id: D001                  # sequential, zero-padded
+#   date: YYYY-MM-DD
+#   type: proposed_read | proposed_cite | proposed_patch | proposed_experiment | other
+#   summary: one line, what is being proposed
+#   detail: optional context, file paths, or reasoning
+#   status: pending | approved | rejected
+#   resolved: null            # date when approved/rejected
+#   notes: optional user comment on resolution
+
+decisions: []

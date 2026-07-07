@@ -1,5 +1,7 @@
 # Nora
 
+[中文入口 →](README.zh-CN.md)
+
 Nora is a personal research workflow system for maintaining project context, recovering stale research projects, and tracking progress across agent sessions — plus a set of optional modules for citation auditing, literature tracking, and writing assistance.
 
 **Status: alpha.** Core project-state management, citation auditing, literature tracking, and writing assistance all exist and are usable; none have seen extensive real-world mileage yet (see Current limitations below).
@@ -11,7 +13,9 @@ Nora is a personal research workflow system for maintaining project context, rec
 - Citation, literature, and writing support are separate, optional modules — each its own skill, each with its own `.nora/<module>/` state, none required to use Nora at all.
 - Agents should read project state at session start and propose (not silently apply) state updates at session end.
 - Prefer Markdown/YAML files over databases; prefer review queues and proposed updates over silent mutation.
-- Human review is required before overwriting important project or module state.
+- Human review is required before overwriting important project or module state. Agent proposals that change research state go through the decision gate (`.nora/decisions/decisions.yaml`): agents append `pending` entries; only the user approves.
+- Nora state stays local by default: `nora new` writes a `.nora/.gitignore` that keeps everything under `.nora/` out of git. Sharing happens by explicit export, not by committing state.
+- One directory = one workspace, resolved like git resolves `.git`: the nearest ancestor with `.nora/` wins (`nora root`). Sibling workspaces of the same research project are normal, not conflicts; nested ones are conflicts.
 
 ## Alpha feature overview
 
@@ -22,6 +26,8 @@ Nora is a personal research workflow system for maintaining project context, rec
 - **Current limitations** — no figure-generation tooling, no Zotero (or any external) write-back, no database backend, no background daemon or web dashboard, no full paper generation, no automatic manuscript rewriting, no automatic BibTeX edits, and no unsupervised claim verification.
 
 ## Quick start
+
+Requires Python 3.8+ (standard library only — no packages to install).
 
 ```bash
 nora install-skills   # symlink all four skills into Claude Code / Codex
@@ -40,8 +46,9 @@ Modules are opt-in. `nora new` only creates the core project state; `nora doctor
 
 `bin/nora` provides:
 
-- `nora new` (alias `nora init`) — scaffold core `.nora/` project state and `AGENTS.md` in the current project. Does not touch any optional module.
-- `nora doctor` — global install check (Nora home, required skills present with `SKILL.md`, skill symlinks not broken) + core project-state check (`ERROR` if missing, only when `.nora/` exists) + optional-module status (`INFO` if not initialized, `WARNING` if initialized but incomplete). Exits non-zero only on `ERROR`.
+- `nora new` (alias `nora init`) — scaffold core `.nora/` project state and `AGENTS.md` in the current directory: the five core state files plus `.nora/.gitignore` (state stays out of git), `.nora/config.yaml` (workspace identity: `project_id`/`workspace_id`/`workspace_type`), and the `.nora/decisions/` decision gate. Does not touch any optional module. Refuses to run inside an existing workspace (nested `.nora` directories conflict).
+- `nora root` — resolve the active workspace: the nearest ancestor directory (including the current one) containing `.nora/`, stopping at `$HOME`/filesystem root. Prints the workspace path and, when `config.yaml` exists, its identity. Agents run this before reading state instead of assuming `./.nora`.
+- `nora doctor` — global install check (Nora home, required skills present with `SKILL.md`, skill symlinks not broken) + core project-state check against the resolved workspace (`ERROR` if a core file is missing) + workspace layout (nested `.nora` inside the workspace = `WARNING`; sibling workspaces next to it = `INFO`, not a conflict; missing `config.yaml`/`.gitignore`/`decisions/` in older workspaces = `INFO`) + optional-module status (`INFO` if not initialized, `WARNING` if initialized but incomplete). Exits non-zero only on `ERROR`.
 - `nora install-skills` (alias `nora install-skill`) — symlink all four skills (`nora-project-manager`, `nora-citation-auditor`, `nora-literature-manager`, `nora-writing-assistant`) into Claude Code (`~/.claude/skills`) and Codex (`~/.codex/skills`), with short aliases `nora`, `nora-citation`, `nora-literature`, `nora-writing`.
 - `nora update` — pull the latest Nora CLI and skills from git (refuses if `$NORA_HOME` has uncommitted changes); if the `AGENTS.md` template changed, prints a note to run `/nora sync-agents` in projects you want to sync.
 - `nora citation init|check|doctor` — citation/BibTeX audit module; see `nora-citation-auditor` below.
@@ -118,11 +125,15 @@ Each project may contain:
 
 ```text
 .nora/
+  .gitignore                   # '*' — Nora state stays out of git by default
+  config.yaml                  # workspace identity (project_id / workspace_id / workspace_type)
   PROJECT_STATE.yaml
   CONTEXT_BRIEF.md
   SESSION_LOG.md
   NEXT_ACTIONS.md
   OPEN_LOOPS.md
+  decisions/
+    decisions.yaml             # decision gate: agent proposals pending user approval
   citation/                    # optional — enabled via `nora citation init`
     CITATION_AUDIT_REPORT.md
     CITATION_REVIEW_QUEUE.yaml
@@ -138,7 +149,7 @@ Each project may contain:
     PHRASE_BANK.md
 ```
 
-`nora new` creates only the top-level five core files plus `AGENTS.md` — none of `citation/`, `literature/`, or `writing/`. Each module directory is created only by its own `nora <module> init`, and only when the user explicitly enables that module. A Nora-managed project is never forced to initialize any module it doesn't need.
+`nora new` creates only the core state (the five state files, `.gitignore`, `config.yaml`, `decisions/`) plus `AGENTS.md` — none of `citation/`, `literature/`, or `writing/`. Each module directory is created only by its own `nora <module> init`, and only when the user explicitly enables that module. A Nora-managed project is never forced to initialize any module it doesn't need. Module `init` commands resolve the workspace root first, so running them from a subdirectory targets the workspace's `.nora/`, never a new nested one. Workspaces created before 0.3.0 lack `.gitignore`/`config.yaml`/`decisions/`; `nora doctor` reports those as `INFO`, not errors.
 
 `nora new` also copies an `AGENTS.md` into the project root, pointing any agent (Claude Code, Codex, or otherwise) at the Nora startup protocol, the four available skills, and the human-review policy, even if that agent doesn't use `nora-project-manager` directly.
 

@@ -18,10 +18,13 @@ This skill currently supports four workflows:
 
 ## Precondition: Nora state must exist
 
-Before running any workflow, check whether `.nora/` exists in the current project.
+Before running any workflow, run `nora root` to resolve the active workspace (the nearest ancestor directory containing `.nora/`). Do not assume `./.nora`.
 
-- If it does not exist, ask the user whether you should run `nora init` to create the file skeleton first. Do not proceed with a workflow, and do not create `.nora/*` files yourself, until the user answers.
-- If the user agrees, run `nora init`, then continue with the requested workflow.
+- If `nora root` finds a workspace, use that workspace's `.nora/` for all reads and writes, even when it is not the current directory.
+- If it finds none, ask the user whether you should run `nora new` to create the file skeleton first. Do not proceed with a workflow, and do not create `.nora/*` files yourself, until the user answers.
+- If the user agrees, run `nora new`, then continue with the requested workflow.
+
+Sibling directories may contain their own `.nora` — they are other workspaces of the same research project, not conflicts. Never read or merge their state implicitly; work in exactly one workspace at a time. If the user names another workspace, resolve it explicitly (cd there or use its path).
 
 ## Argument routing
 
@@ -43,27 +46,38 @@ Before running any workflow, check whether `.nora/` exists in the current projec
 
 ## Project-local state files
 
-A Nora-enabled project should contain:
+A Nora-enabled workspace should contain:
 
 ```text
 .nora/
+  .gitignore            # '*' — Nora state stays out of git by default
+  config.yaml           # workspace identity (project_id / workspace_id / workspace_type)
   PROJECT_STATE.yaml
   CONTEXT_BRIEF.md
   SESSION_LOG.md
   NEXT_ACTIONS.md
   OPEN_LOOPS.md
+  decisions/
+    decisions.yaml      # decision gate: agent proposals pending user approval
 ```
+
+Older workspaces may lack `.gitignore`, `config.yaml`, or `decisions/` — treat that as legacy, not broken (`nora doctor` reports these as INFO).
 
 ## Startup protocol
 
 When working in a Nora-enabled project:
 
-1. Read `.nora/CONTEXT_BRIEF.md` if it exists.
-2. Read `.nora/PROJECT_STATE.yaml` if it exists.
-3. Read `.nora/NEXT_ACTIONS.md` if it exists.
-4. Read `.nora/OPEN_LOOPS.md` if it exists.
-5. Identify the current session goal.
-6. Recommend the smallest useful next action.
+1. Run `nora root`; use the workspace it resolves for every step below.
+2. Read `.nora/CONTEXT_BRIEF.md` if it exists.
+3. Read `.nora/PROJECT_STATE.yaml` if it exists.
+4. Read `.nora/NEXT_ACTIONS.md` if it exists.
+5. Read `.nora/OPEN_LOOPS.md` if it exists.
+6. Identify the current session goal.
+7. Recommend the smallest useful next action.
+
+## Decision gate
+
+`.nora/decisions/decisions.yaml` holds agent proposals. Append entries with `status: pending` when work produces state-changing suggestions (papers to read/cite, writing patches, experiment ideas). Only the user approves or rejects; never act on a pending proposal as if approved.
 
 ## HITL policy
 

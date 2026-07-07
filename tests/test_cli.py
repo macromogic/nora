@@ -75,12 +75,75 @@ def test_init_is_alias_for_new(env, capsys):
     assert Path(".nora/PROJECT_STATE.yaml").is_file()
 
 
+def test_new_creates_workspace_identity_and_gate(env, capsys):
+    assert run("new") == 0
+    gitignore = Path(".nora/.gitignore")
+    assert gitignore.is_file() and gitignore.read_text().strip() == "*"
+    config = Path(".nora/config.yaml").read_text()
+    assert "project_id: project" in config  # slug of the test dir name
+    assert "workspace_id: main" in config
+    assert Path(".nora/decisions/decisions.yaml").is_file()
+
+
+def test_new_refuses_nested_workspace(env, capsys):
+    run("new")
+    sub = Path("sub/dir")
+    sub.mkdir(parents=True)
+    os.chdir(sub)
+    capsys.readouterr()
+    assert run("new") == 1
+    out = capsys.readouterr().out
+    assert "Refusing to create nested Nora state" in out
+    assert not Path(".nora").exists()
+
+
+# --- root ---------------------------------------------------------------------
+
+def test_root_resolves_from_subdir(env, capsys):
+    run("new")
+    project_root = Path.cwd()
+    sub = Path("sections/deep")
+    sub.mkdir(parents=True)
+    os.chdir(sub)
+    capsys.readouterr()
+    assert run("root") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == str(project_root)
+    assert out[1].startswith("workspace: main")
+    assert "project: project" in out[1]
+
+
+def test_root_not_found_exits_1(env, capsys):
+    assert run("root") == 1
+    assert "No Nora workspace found" in capsys.readouterr().out
+
+
+def test_root_does_not_cross_home_boundary(env, capsys, monkeypatch):
+    # a stray .nora above $HOME must not capture directories inside $HOME
+    (env / ".nora").mkdir()  # env is the parent of the fake home
+    home = Path(os.environ["HOME"])
+    inside = home / "some" / "dir"
+    inside.mkdir(parents=True)
+    monkeypatch.chdir(inside)
+    assert run("root") == 1
+
+
+def test_root_finds_nora_in_home_itself(env, capsys, monkeypatch):
+    home = Path(os.environ["HOME"])
+    (home / ".nora").mkdir()
+    inside = home / "notes"
+    inside.mkdir()
+    monkeypatch.chdir(inside)
+    assert run("root") == 0
+    assert capsys.readouterr().out.splitlines()[0] == str(home)
+
+
 # --- doctor: three tiers ----------------------------------------------------
 
 def test_doctor_ok_outside_project(env, capsys):
     assert run("doctor") == 0
     out = capsys.readouterr().out
-    assert "Not in a Nora-managed project directory" in out
+    assert "Not in a Nora-managed workspace" in out
     assert "no errors" in out
 
 
@@ -123,6 +186,74 @@ def test_doctor_error_on_broken_symlink(env, capsys):
     assert run("doctor") == 1
     out = capsys.readouterr().out
     assert "ERROR: broken symlink" in out
+
+
+def test_doctor_reports_workspace_and_identity(env, capsys):
+    run("new")
+    capsys.readouterr()
+    assert run("doctor") == 0
+    out = capsys.readouterr().out
+    assert f"Workspace: {Path.cwd()}" in out
+    assert "Identity: workspace: main" in out
+
+
+def test_doctor_works_from_subdir(env, capsys):
+    run("new")
+    sub = Path("chapters")
+    sub.mkdir()
+    os.chdir(sub)
+    capsys.readouterr()
+    assert run("doctor") == 0
+    out = capsys.readouterr().out
+    assert "OK: .nora/PROJECT_STATE.yaml" in out
+
+
+def test_doctor_warns_on_nested_nora(env, capsys):
+    run("new")
+    (Path("experiments") / ".nora").mkdir(parents=True)
+    capsys.readouterr()
+    assert run("doctor") == 0  # nested is a WARNING, not an ERROR
+    out = capsys.readouterr().out
+    assert "WARNING: nested .nora inside this workspace" in out
+    assert "experiments/.nora" in out
+
+
+def test_doctor_reports_sibling_workspace_as_info(env, capsys):
+    run("new")
+    sibling = env / "paper-draft" / ".nora"
+    sibling.mkdir(parents=True)
+    capsys.readouterr()
+    assert run("doctor") == 0
+    out = capsys.readouterr().out
+    assert "INFO: sibling workspace" in out
+    assert "paper-draft/.nora" in out
+    assert "not a conflict" in out
+
+
+def test_doctor_skips_sibling_scan_directly_under_home(env, capsys, monkeypatch):
+    home = Path(os.environ["HOME"])
+    ws = home / "my-project"
+    ws.mkdir()
+    other = home / "other-project" / ".nora"
+    other.mkdir(parents=True)
+    monkeypatch.chdir(ws)
+    run("new")
+    capsys.readouterr()
+    assert run("doctor") == 0
+    assert "sibling workspace" not in capsys.readouterr().out
+
+
+def test_doctor_legacy_workspace_infos(env, capsys):
+    run("new")
+    Path(".nora/config.yaml").unlink()
+    Path(".nora/.gitignore").unlink()
+    Path(".nora/decisions/decisions.yaml").unlink()
+    capsys.readouterr()
+    assert run("doctor") == 0  # legacy gaps are INFO, never ERROR
+    out = capsys.readouterr().out
+    assert "INFO: no .nora/config.yaml" in out
+    assert "INFO: no .nora/.gitignore" in out
+    assert "INFO: no .nora/decisions/decisions.yaml" in out
 
 
 def test_doctor_error_on_bad_nora_home(env, capsys, monkeypatch):
@@ -246,6 +377,18 @@ def test_module_help_on_unknown_subcommand(env, capsys, mod):
     assert f"nora {mod} init" in help_out
     assert run(mod, "bogus") == 0
     assert capsys.readouterr().out == help_out
+
+
+def test_module_init_from_subdir_targets_workspace_root(env, capsys):
+    run("new")
+    project_root = Path.cwd()
+    sub = Path("src/deep")
+    sub.mkdir(parents=True)
+    os.chdir(sub)
+    capsys.readouterr()
+    assert run("citation", "init") == 0
+    assert (project_root / ".nora" / "citation").is_dir()
+    assert not Path(".nora").exists()
 
 
 def test_citation_check_is_agent_driven_notice(env, capsys):
