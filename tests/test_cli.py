@@ -306,10 +306,10 @@ def test_install_skills_no_agent_dirs_exits_1(env, capsys):
 
 # --- modules: init + doctor + help ------------------------------------------
 
+# literature has its own backend and test section below (papers.yaml, Stage 3)
 MODULE_FILES = {
     "citation": ["CITATION_AUDIT_REPORT.md", "CITATION_REVIEW_QUEUE.yaml",
                  "CLAIM_SUPPORT_AUDIT.md"],
-    "literature": ["LITERATURE_LOG.md", "READING_QUEUE.md", "RELATED_WORK_MAP.md"],
     "writing": ["WRITING_STYLE.md", "STYLE_NOTES.md", "PHRASE_BANK.md"],
 }
 
@@ -323,8 +323,6 @@ def test_module_init_project_mode(env, capsys, mod):
     assert "standalone" not in out
     for f in MODULE_FILES[mod]:
         assert (Path(".nora") / mod / f).is_file(), f
-    if mod == "literature":
-        assert Path(".nora/literature/PAPER_NOTES/.gitkeep").is_file()
 
 
 @pytest.mark.parametrize("mod", MODULE_FILES)
@@ -399,6 +397,277 @@ def test_citation_check_is_agent_driven_notice(env, capsys):
 def test_lit_alias_routes_to_literature(env, capsys):
     assert run("lit") == 0
     assert "Nora literature manager" in capsys.readouterr().out
+
+
+# --- literature backend (papers.yaml, Stage 3) --------------------------------
+
+APPROVED_DECISIONS = """\
+decisions:
+  - id: D001
+    date: 2026-07-07
+    type: proposed_read
+    summary: test approval
+    status: approved
+    resolved: 2026-07-07
+    notes: null
+  - id: D002
+    date: 2026-07-07
+    type: proposed_read
+    summary: still pending
+    status: pending
+    resolved: null
+    notes: null
+"""
+
+
+def lit_project(capsys):
+    """nora new + literature init inside the env fixture's cwd."""
+    run("new")
+    run("literature", "init")
+    Path(".nora/decisions/decisions.yaml").write_text(APPROVED_DECISIONS)
+    capsys.readouterr()
+
+
+def ingest_one(capsys, title="Probing Instruction Adherence in Long Dialogues",
+               author="Lee, Carol", year="2022"):
+    assert run("literature", "ingest", "--title", title,
+               "--author", author, "--year", year) == 0
+    out = capsys.readouterr().out
+    assert "added:" in out
+    return out.split("added: ")[1].split()[0]
+
+
+def test_literature_init_creates_backend_layout(env, capsys):
+    run("new")
+    capsys.readouterr()
+    assert run("literature", "init") == 0
+    out = capsys.readouterr().out
+    assert "papers.yaml" in out
+    assert Path(".nora/literature/papers.yaml").is_file()
+    assert Path(".nora/literature/PAPER_NOTES").is_dir()
+    assert "standalone" not in out
+
+
+def test_literature_init_standalone_note(env, capsys):
+    assert run("literature", "init") == 0
+    out = capsys.readouterr().out
+    assert "no full Nora project state found" in out
+    assert "(standalone)" in out
+
+
+def test_literature_init_idempotent(env, capsys):
+    lit_project(capsys)
+    assert run("literature", "init") == 0
+    assert "already exists" in capsys.readouterr().out
+
+
+def test_literature_init_refuses_legacy_layout(env, capsys):
+    run("new")
+    legacy = Path(".nora/literature")
+    legacy.mkdir()
+    (legacy / "LITERATURE_LOG.md").write_text("# old\n")
+    capsys.readouterr()
+    assert run("literature", "init") == 1
+    out = capsys.readouterr().out
+    assert "pre-0.4" in out
+    assert "no automatic migration" in out
+
+
+def test_literature_ingest_manual_and_roundtrip(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    assert pid == "lee2022probing"
+    text = Path(".nora/literature/papers.yaml").read_text()
+    assert 'title: "Probing Instruction Adherence in Long Dialogues"' in text
+    assert 'status: "candidate"' in text
+
+
+def test_literature_ingest_dedup_on_entry(env, capsys):
+    lit_project(capsys)
+    ingest_one(capsys)
+    assert run("literature", "ingest", "--title",
+               "Probing  Instruction Adherence in Long Dialogues!") == 0
+    out = capsys.readouterr().out
+    assert "skipped (already present as lee2022probing)" in out
+    assert "0 added" in out
+
+
+def test_literature_ingest_bibtex(env, capsys, tmp_path):
+    lit_project(capsys)
+    bib = tmp_path / "refs.bib"
+    bib.write_text("""
+@article{smith2021deep,
+  title = {Deep {Sequence} Models},
+  author = {Smith, Alice and Jones, Bob},
+  year = {2021},
+  journal = {JAIR},
+  doi = {https://doi.org/10.1000/XYZ.123}
+}
+@misc{chen2022drift,
+  title = {Instruction Drift},
+  author = {Chen, Erin},
+  year = {2022},
+  eprint = {2205.01234},
+  archivePrefix = {arXiv}
+}
+""")
+    assert run("literature", "ingest", "--bibtex", str(bib)) == 0
+    out = capsys.readouterr().out
+    assert "2 added" in out
+    text = Path(".nora/literature/papers.yaml").read_text()
+    assert 'doi: "10.1000/xyz.123"' in text          # normalized
+    assert 'arxiv: "2205.01234"' in text
+    assert 'venue: "arXiv"' in text
+    assert 'authors: ["Smith, Alice", "Jones, Bob"]' in text
+
+
+def test_literature_ingest_titles_file(env, capsys, tmp_path):
+    lit_project(capsys)
+    titles = tmp_path / "titles.txt"
+    titles.write_text("# comment\nA Survey of Conversational Memory\n\nScaling Effects on Context Retention\n")
+    assert run("literature", "ingest", "--titles", str(titles)) == 0
+    assert "2 added" in capsys.readouterr().out
+
+
+def test_literature_dedup_fuzzy_review_only(env, capsys):
+    lit_project(capsys)
+    ingest_one(capsys, title="Instruction Drift in Long Conversations", author="Chen, Erin")
+    ingest_one(capsys, title="Instruction Drift in Long Conversation", author="Chen, E.")
+    assert run("literature", "dedup") == 0
+    out = capsys.readouterr().out
+    assert "REVIEW_REQUIRED (near-identical titles)" in out
+    assert "DUPLICATE" not in out  # near match is a candidate, not a fact
+
+
+def test_literature_dedup_flags_trailing_subtitle(env, capsys):
+    lit_project(capsys)
+    ingest_one(capsys, title="Deep Sequence Models for Dialogue State Tracking", author="Smith, Alice")
+    ingest_one(capsys, title="Deep Sequence Models for Dialogue State Tracking (Extended)",
+               author="Smith, Alice")
+    assert run("literature", "dedup") == 0
+    assert "REVIEW_REQUIRED (near-identical titles)" in capsys.readouterr().out
+
+
+def test_literature_queue_and_mark_free_transitions(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    assert run("literature", "mark", pid, "queued") == 0
+    assert run("literature", "mark", pid, "reading") == 0
+    capsys.readouterr()
+    assert run("literature", "queue") == 0
+    out = capsys.readouterr().out
+    assert "reading:" in out and pid in out
+
+
+def test_literature_mark_gated_refused_without_decision(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    assert run("literature", "mark", pid, "read") == 1
+    out = capsys.readouterr().out
+    assert "gated status" in out
+    assert '"candidate"' not in out  # message, not a stack trace
+    text = Path(".nora/literature/papers.yaml").read_text()
+    assert 'status: "candidate"' in text  # unchanged
+
+
+def test_literature_mark_gated_refused_pending_or_missing(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    assert run("literature", "mark", pid, "read", "--decision", "D002") == 1
+    assert "not 'approved'" in capsys.readouterr().out
+    assert run("literature", "mark", pid, "read", "--decision", "D999") == 1
+    assert "not found" in capsys.readouterr().out
+
+
+def test_literature_mark_gated_with_approved_decision(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    assert run("literature", "mark", pid, "read", "--decision", "D001") == 0
+    assert "candidate -> read (decision D001)" in capsys.readouterr().out
+    text = Path(".nora/literature/papers.yaml").read_text()
+    assert 'status: "read"' in text
+    assert 'decision: "D001"' in text
+
+
+def test_literature_mark_roles_and_note(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    assert run("literature", "mark", pid, "--role", "background",
+               "--role", "methodology", "--note", "grounds the probing setup") == 0
+    out = capsys.readouterr().out
+    assert "roles: [background, methodology]" in out and "note updated" in out
+    text = Path(".nora/literature/papers.yaml").read_text()
+    assert 'roles: ["background", "methodology"]' in text
+    assert 'note: "grounds the probing setup"' in text
+    assert 'status: "candidate"' in text  # status untouched
+
+
+def test_literature_mark_nothing_to_change(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    assert run("literature", "mark", pid) == 1
+    assert "Nothing to change" in capsys.readouterr().out
+
+
+def test_literature_coverage_reports_gaps(env, capsys):
+    lit_project(capsys)
+    ingest_one(capsys)
+    capsys.readouterr()
+    assert run("literature", "coverage") == 0
+    out = capsys.readouterr().out
+    assert "Papers: 1 total" in out
+    assert "unassigned (no roles yet): 1" in out
+    assert "Gaps (roles with no papers)" in out
+
+
+def test_literature_render_generates_views(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    run("literature", "mark", pid, "queued")
+    capsys.readouterr()
+    assert run("literature", "render") == 0
+    queue_md = Path(".nora/literature/READING_QUEUE.md").read_text()
+    map_md = Path(".nora/literature/RELATED_WORK_MAP.md").read_text()
+    assert queue_md.startswith("<!-- Generated by 'nora literature render'")
+    assert pid in queue_md
+    assert "(no role assigned yet)" in map_md
+
+
+def test_literature_doctor_ok_and_gate_violation(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)
+    capsys.readouterr()
+    assert run("literature", "doctor") == 0
+    assert "decision gate consistent" in capsys.readouterr().out
+
+    # simulate a hand-edited promotion bypassing the gate
+    text = Path(".nora/literature/papers.yaml").read_text()
+    Path(".nora/literature/papers.yaml").write_text(
+        text.replace('status: "candidate"', 'status: "cited"'))
+    assert run("literature", "doctor") == 1
+    out = capsys.readouterr().out
+    assert f"WARNING: {pid} is 'cited' (gated) with no decision recorded" in out
+
+
+def test_literature_doctor_legacy_layout_is_info(env, capsys):
+    run("new")
+    legacy = Path(".nora/literature")
+    legacy.mkdir()
+    (legacy / "READING_QUEUE.md").write_text("# old\n")
+    capsys.readouterr()
+    assert run("literature", "doctor") == 0
+    assert "INFO: pre-0.4 literature layout" in capsys.readouterr().out
+
+
+def test_core_doctor_includes_literature_lines(env, capsys):
+    lit_project(capsys)
+    assert run("doctor") == 0
+    out = capsys.readouterr().out
+    assert "OK: papers.yaml parses (0 papers)" in out
+
+
+def test_literature_unknown_subcommand_exits_2_with_usage(env, capsys):
+    assert run("literature", "bogus") == 2  # argparse usage error
 
 
 # --- update refusal paths ----------------------------------------------------

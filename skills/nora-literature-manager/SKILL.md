@@ -1,42 +1,44 @@
 ---
 name: nora-literature-manager
-description: Search, triage, track, and organize research literature for a project — reading queues, per-paper notes, and a related-work map, distinguishing candidate papers from ones actually read or cited. Use this skill when finding related work, deciding what to read next, taking notes on a paper, or organizing how papers relate to each other and to your project's claims. Works with or without web search tools, and with or without a Nora project.
+description: Track, triage, and organize research literature around the structured papers.yaml backend — ingesting candidates, assigning roles, maintaining a decision-gated reading lifecycle, and keeping per-paper notes. Use this skill when collecting related work, deciding what to read next, taking notes on a paper, or mapping how papers relate to the project. Works with or without web search tools, and with or without a Nora project.
 ---
 
 # Nora Literature Manager
 
 ## Purpose
 
-Help search, triage, track, and organize research literature for a project. This skill focuses on literature *workflow management* — reading queues, triage rationale, per-paper notes, and a related-work map — not on being a full literature-search API client.
+Help track, triage, and organize research literature. Since 0.4.0 the module is backed by a structured state file: `.nora/literature/papers.yaml` is the single source of truth, written only by `nora literature` CLI commands. This skill supplies the judgment (what a paper is for, whether it's worth reading, why it matters); the CLI does the bookkeeping (ids, dedup, status machine, generated views).
+
+Division of labor, in one line each:
+
+- **CLI** (`nora literature ...`): ingest, dedup, status transitions (with the decision gate enforced mechanically), coverage report, rendered markdown views.
+- **This skill**: relevance judgment, role assignment, reading rationale, per-paper notes under `PAPER_NOTES/`.
 
 This skill currently supports five workflows:
 
-- `search`: find candidate papers (using web/search tools if available, or by organizing manually supplied papers if not)
-- `triage`: review candidates and decide whether they're worth reading, with a recorded rationale
-- `reading-queue`: view and update the reading queue (status, priority, "why it matters")
-- `paper-note`: create or update a per-paper note
-- `related-work-map`: organize papers by topic, method, claim, or comparison axis
+- `search`: collect candidate papers (via web/search tools if available, or from user-supplied material) and ingest them
+- `triage`: judge candidates, assign roles and relevance notes, queue what's worth reading
+- `reading-queue`: view and advance the reading queue through the status machine
+- `paper-note`: create or update a per-paper note under `PAPER_NOTES/`
+- `related-work-map`: check role coverage and regenerate the related-work view
 
 ## Scope
 
 This skill does not:
 
-- Implement a full literature-search API client. If web/search tools are available in the session, use them; if not, work from whatever the user supplies (titles, DOIs, BibTeX entries, PDFs, pasted abstracts, notes).
-- Judge whether a citation supports a specific claim — that's `nora-citation-auditor`'s `audit-claim-support` workflow. This skill tracks *what to read and why*; the claim-support audit happens once something is actually being cited.
-- Write BibTeX entries or modify `.bib`/`.tex` files. If a paper should be added to the bibliography, say so and suggest the user (or `nora-citation-auditor`) do it — don't do it here.
-- Write to Zotero or assume any external reference manager integration.
+- Implement a full literature-search API client. If web/search tools are available in the session, use them; if not, work from whatever the user supplies (titles, DOIs, BibTeX entries, PDFs, pasted abstracts). Automated source expansion (arXiv/OpenAlex/...) is a future CLI feature, not this skill's job.
+- Judge whether a citation supports a specific claim — that's `nora-citation-auditor`'s `audit-claim-support`.
+- Write BibTeX entries or modify `.bib`/`.tex` files. `proposed_cite` means "we propose citing this"; the actual `.bib` entry is the user's (or citation-auditor-assisted) step.
+- Edit `papers.yaml` by hand — ever. All mutations go through `nora literature` commands. If a command is missing for something, say so and propose it; don't work around the CLI.
 
 ## Precondition: Nora state is optional
 
-Unlike `nora-project-manager`, this skill does not require `.nora/` to exist.
+Run `nora root` first to resolve the workspace. This skill does not require a full `.nora/` project:
 
-- If `.nora/` exists, treat this as a Nora-enabled project: read `.nora/PROJECT_STATE.yaml` / `.nora/CONTEXT_BRIEF.md` for context on what the project is actually about (so triage relevance judgments are grounded), and write output under `.nora/literature/`.
-- If `.nora/` does not exist, run in **standalone literature mode**: state this explicitly to the user, still write output under `.nora/literature/` (creating just that subdirectory), and don't require any other project artifacts.
+- If `.nora/` exists, read `.nora/PROJECT_STATE.yaml` / `.nora/CONTEXT_BRIEF.md` so triage judgments are grounded in what the project is actually about.
+- If `.nora/` does not exist, run in **standalone literature mode**: state this explicitly, and let `nora literature init` create just `.nora/literature/`.
 
-Before running any workflow, check whether `.nora/literature/` exists.
-
-- If it does not exist, ask the user whether you should run `nora literature init` to create the skeleton first. Do not create `.nora/literature/*` files yourself outside that skeleton until the user answers.
-- If the user agrees, run `nora literature init`, then continue with the requested workflow.
+Before any workflow, check that `.nora/literature/papers.yaml` exists (`nora literature doctor`). If the module isn't initialized, ask the user before running `nora literature init`. If doctor reports a pre-0.4 layout (markdown files, no papers.yaml), tell the user the module was redesigned and let *them* decide when to move the old files aside — don't delete or migrate anything on your own.
 
 ## Argument routing
 
@@ -46,59 +48,53 @@ Before running any workflow, check whether `.nora/literature/` exists.
 - If `$ARGUMENTS` starts with `reading-queue` → follow `workflows/reading-queue.md`.
 - If `$ARGUMENTS` starts with `paper-note` → follow `workflows/paper-note.md`.
 - If `$ARGUMENTS` starts with `related-work-map` → follow `workflows/related-work-map.md`.
-- Otherwise (empty, or any unrecognized argument) → do not guess a workflow. Summarize the current reading queue (counts by status) if `.nora/literature/` exists, or say that no literature state was found, and ask what the user wants to do. If `$ARGUMENTS` has text, treat it as the user's actual request evaluated against that context.
+- Otherwise (empty, or any unrecognized argument) → do not guess a workflow. Run `nora literature queue` and `nora literature coverage` if the module is initialized, summarize the state, and ask what the user wants to do. If `$ARGUMENTS` has text, treat it as the user's actual request evaluated against that context.
+
+## The status machine and the decision gate
+
+```text
+candidate -> queued -> reading -> read -> proposed_cite -> cited
+        \______________________________________________-> rejected
+```
+
+- Free transitions (`candidate`/`queued`/`reading`, any direction): the agent may run `nora literature mark` directly — queueing is bookkeeping, not a research decision.
+- Gated transitions (anything to `read`, `proposed_cite`, `cited`, or `rejected`): append a proposal to `.nora/decisions/decisions.yaml` (`status: pending`), wait for the user to approve, then run `mark <id> <status> --decision <id>`. The CLI refuses gated promotions without an approved decision — do not attempt to bypass this by editing papers.yaml, and treat a refusal as "ask the user", not as an obstacle.
+- `cited` additionally means the paper is actually cited in the manuscript's `.tex`/`.bib` — verify (or say you haven't) before proposing it.
+
+## Roles
+
+Assign one or more roles per paper during triage (`mark <id> --role ...`):
+
+`direct_related`, `background`, `platform_spec`, `threat_model`, `methodology`, `evaluation_tool`, `dataset_benchmark`, `defense_mitigation`, `competing_system`, `survey`, `other`
+
+Roles answer "what is this paper *for*, in this project" — `nora literature coverage` reports the role × status matrix and gaps, which is what `related-work-map` reasons over.
 
 ## Core principles
 
-1. Record *why* a paper matters, not just its title — every entry in the reading queue and every paper note needs a relevance note, not a bare citation.
-2. Keep candidates and confirmed reads/citations clearly distinct (see Paper statuses below) — never silently promote a `candidate` to `read` or `cited` without that actually having happened.
-3. Do not invent paper content. If you don't have an abstract or text, say so; don't guess what a paper says from its title alone.
-4. Do not write to `.bib`/`.tex` or claim a paper is cited until it actually is — that's a fact about the manuscript, not about this skill's queue.
-5. Prefer proposed updates over silent mutation, matching the rest of Nora — but for low-stakes, purely additive log/queue entries (e.g. appending a new candidate found during `search`), it's reasonable to write directly and then summarize what was added, since nothing existing is being overwritten. Reserve explicit propose-then-confirm for anything that changes an existing entry's status or content.
-
-## Paper statuses
-
-Use exactly these statuses, in this rough lifecycle order (not every paper passes through every stage):
-
-- `candidate`: surfaced by `search`, not yet triaged
-- `screened`: looked at during `triage`, judged plausibly relevant, not yet queued to read
-- `to-read`: queued, not started
-- `reading`: in progress
-- `read`: finished reading, note may or may not exist yet
-- `cited`: actually cited in the project's `.tex`/`.bib` (verify before assigning this — don't assume)
-- `rejected`: triaged out; record why in `LITERATURE_LOG.md`
-- `replaced`: superseded by a better/newer source; record what replaced it
+1. Record *why* a paper matters (`mark --note`), not just its title. "Came up in search" is not a reason.
+2. Never invent paper content. No abstract, no notes → say so; don't guess from the title.
+3. All literature state changes go through `nora literature` commands. Generated views (`READING_QUEUE.md`, `RELATED_WORK_MAP.md`) are read-only output — regenerate with `render`, never edit.
+4. The decision gate is the user's control point. Batch related proposals into one decisions.yaml entry where sensible (e.g. one triage session), but never promote past the gate yourself.
+5. Ingest is additive and low-stakes (new candidates only, built-in dedup) — run it directly and summarize. Everything that changes an existing paper's meaning (roles, notes, status) follows the gate rules above.
 
 ## Project-local output
 
 ```text
 .nora/literature/
-  LITERATURE_LOG.md
-  READING_QUEUE.md
-  RELATED_WORK_MAP.md
-  PAPER_NOTES/
+  papers.yaml           # single source of truth — CLI-owned, never hand-edited
+  READING_QUEUE.md      # generated view ('nora literature render')
+  RELATED_WORK_MAP.md   # generated view ('nora literature render')
+  PAPER_NOTES/          # one note per paper, named <id>.md (agent/human-written)
 ```
-
-- `LITERATURE_LOG.md` — records search/triage activity and inclusion/exclusion rationale.
-- `READING_QUEUE.md` — tracks papers by status, with a relevance note per entry.
-- `RELATED_WORK_MAP.md` — organizes papers by topic, method, claim, or comparison axis.
-- `PAPER_NOTES/` — one file per paper that's been read or is being actively evaluated in depth; see `workflows/paper-note.md`.
 
 ## Output requirements
 
-For `search` and `triage`, end with a summary of what was added or changed in `READING_QUEUE.md` and `LITERATURE_LOG.md`.
+For `search` and `triage`, end with the CLI's own summary lines (added/skipped, marks applied) plus any pending decision proposals awaiting the user.
 
-For `reading-queue`, end with the current queue state (grouped by status) and, if anything changed, what changed.
+For `reading-queue`, end with `nora literature queue` output and what changed.
 
 For `paper-note`, end with the note's file path and a short summary of its contents.
 
-For `related-work-map`, end with a proposed diff-style update to `RELATED_WORK_MAP.md`:
-
-```markdown
-## Proposed Nora literature updates
-
-### RELATED_WORK_MAP.md
-...
-```
+For `related-work-map`, end with the `coverage` report, the gaps you'd prioritize filling, and a note that `render` was run (if it was).
 
 If no update is needed, explicitly say so.

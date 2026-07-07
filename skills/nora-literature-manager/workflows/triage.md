@@ -1,46 +1,31 @@
 # Workflow: Triage
 
-Use this workflow to review `candidate` papers and decide whether they're worth reading.
+Use this workflow to judge `candidate` papers: what each is for (roles), why it matters (note), and whether it's worth queueing to read.
 
 ## Goal
 
-Move each candidate to `screened` (plausibly relevant, not yet queued), `to-read` (queued), or `rejected` (not relevant) — always with a recorded rationale.
+Every triaged candidate carries roles + a relevance note, and is either queued (`queued`), left as `candidate` (not enough information), or proposed for rejection through the decision gate.
 
 ## Procedure
 
-### 1. Gather candidates in scope
+### 1. Gather candidates
 
-Read `READING_QUEUE.md` for entries with status `candidate`. If the user named specific papers, scope to those; otherwise triage all current candidates.
+`nora literature queue` shows what's already queued; list candidates from `nora literature coverage` counts and the conversation. If the user named specific papers, scope to those.
 
 ### 2. Judge relevance
 
-For each candidate, using whatever's available (title, abstract, venue, prior notes — do not invent content you don't have):
+For each candidate, using whatever is actually available (title, abstract, venue, prior notes — never invented content):
 
-- Does it relate to the project's actual current goal (per `.nora/CONTEXT_BRIEF.md`/`PROJECT_STATE.yaml` if available, or the user's stated focus)?
-- Is it a plausible related-work citation, a baseline, a method source, or background — or none of these?
+- Does it relate to the project's current goal (per `.nora/CONTEXT_BRIEF.md` / `PROJECT_STATE.yaml` if present)?
+- What is it *for*: assign roles from the fixed list (see SKILL.md), e.g. a baseline is `competing_system`, a method source is `methodology`.
 
-### 3. Decide
+### 3. Apply judgments via the CLI
 
-For each candidate, assign exactly one:
-
-- `screened`: plausibly relevant, worth a closer look later, but not queued yet.
-- `to-read`: relevant enough to queue now.
-- `rejected`: not relevant — record why (e.g. "off-topic", "superseded by X", "wrong problem setting").
-
-If you genuinely can't tell from what's available, leave it as `candidate` and say so — don't force a decision without enough information.
+- Roles + note (agent-safe, no gate): `nora literature mark <id> --role R1 --role R2 --note "..."`
+- Worth reading now (free transition): `nora literature mark <id> queued`
+- Not relevant (**gated**): do not mark `rejected` directly. Append one proposal to `.nora/decisions/decisions.yaml` (`status: pending`) listing the papers and the rejection reasons; after the user approves, run `nora literature mark <id> rejected --decision <id>` per paper.
+- Genuinely can't tell: leave as `candidate` and say so — don't force a call.
 
 ### 4. Output
 
-Propose the status changes as a diff against `READING_QUEUE.md` (this changes existing entries, so per `SKILL.md`'s core principles, propose rather than silently write). Append the rationale for each decision to `LITERATURE_LOG.md`.
-
-```markdown
-## Proposed Nora literature updates
-
-### READING_QUEUE.md
-...
-
-### LITERATURE_LOG.md
-...
-```
-
-Apply only on user confirmation.
+End with: marks applied (CLI output), the pending rejection proposal if one was filed (and that it awaits the user), and `nora literature coverage` if role assignments changed the picture.

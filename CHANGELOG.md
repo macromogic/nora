@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-07-07
+
+Alpha. This release delivers the literature redesign announced in 0.2.0:
+`.nora/literature/` is now backed by structured state, and the old markdown
+layout is not migrated automatically.
+
+### Added
+
+- `nora literature` structured backend (Stage 3 of the system-centric redesign): `.nora/literature/papers.yaml` is the single source of truth, written and parsed only by the CLI (strict YAML subset — no YAML library, the parser accepts exactly what the emitter produces, round-trip tested)
+- `nora literature ingest` — add candidate papers from `--bibtex FILE`, `--titles FILE` (one per line), or manual flags (`--title/--author/--year/--venue/--doi/--arxiv/--url/--note`); dedups on entry against normalized DOI, arXiv id, and normalized title; assigns stable local ids (first-author surname + year + first substantive title word, matching the planned citation-key convention)
+- `nora literature mark <id> [status] [--role ...] [--note ...]` — the only state-transition entry point. Free transitions (`candidate`/`queued`/`reading`) run directly; promotions to `read`/`proposed_cite`/`cited`/`rejected` are **mechanically refused** unless `--decision <id>` references an `approved` entry in `.nora/decisions/decisions.yaml`. The decision gate is now enforced by the CLI, not just by prompt-level convention.
+- `nora literature dedup` — reports exact duplicates (DOI/arXiv/normalized title) and near-identical-title candidates (`REVIEW_REQUIRED`); never merges automatically
+- `nora literature queue` / `coverage` / `render` — reading-queue listing, role × status coverage report with gap detection, and regeneration of the markdown views (`READING_QUEUE.md`, `RELATED_WORK_MAP.md`) from papers.yaml
+- `nora literature doctor` — parses papers.yaml and cross-checks the decision gate: any paper in a gated status must reference an existing, approved decision; violations are reported as WARNINGs (also surfaced by the core `nora doctor`)
+- Role taxonomy for papers (`direct_related`, `background`, `platform_spec`, `threat_model`, `methodology`, `evaluation_tool`, `dataset_benchmark`, `defense_mitigation`, `competing_system`, `survey`, `other`)
+- Test suite grew from 54 to 83: papers.yaml round-trip (including hostile strings), gate refusal paths, dedup conservatism, BibTeX reader, full CLI surface of the new subcommands
+
+### Changed
+
+- **BREAKING**: the literature module is redesigned around the structured backend. `LITERATURE_LOG.md` is gone; `READING_QUEUE.md` and `RELATED_WORK_MAP.md` are now generated views (do not edit); paper statuses changed from `candidate/screened/to-read/reading/read/cited/rejected/replaced` to `candidate/queued/reading/read/proposed_cite/cited/rejected`; per-paper notes are keyed by local id (`PAPER_NOTES/<id>.md`). There is no automatic migration: pre-0.4 layouts get an `INFO` from doctor and re-init instructions, and `nora literature init` refuses to overwrite them.
+- `nora-literature-manager` skill rewritten to drive the CLI: the skill supplies judgment (triage rationale, roles, notes, gap analysis), the CLI owns all state mutations; workflows now route gated promotions through decisions.yaml proposals
+- `nora literature` subcommands are parsed with argparse (first argparse subtree in the CLI; other commands keep the original dispatch)
+
 ## [0.3.0] - 2026-07-07
 
 Alpha. Heads-up still applies: the `.nora/literature/` layout will be

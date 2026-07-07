@@ -49,18 +49,8 @@ MODULES = {
         "doctor_ok": "Citation audit state looks OK.",
         "doctor_incomplete": "Citation module is initialized but incomplete.",
     },
-    "literature": {
-        "files": [
-            ".nora/literature/LITERATURE_LOG.md",
-            ".nora/literature/READING_QUEUE.md",
-            ".nora/literature/RELATED_WORK_MAP.md",
-        ],
-        "dirs": [".nora/literature/PAPER_NOTES"],
-        "state_name": "Literature",
-        "doctor_intro": "Checking literature state...",
-        "doctor_ok": "Literature state looks OK.",
-        "doctor_incomplete": "Literature module is initialized but incomplete.",
-    },
+    # literature is handled by nora_cli.literature (papers.yaml backend);
+    # it is intentionally absent here.
     "writing": {
         "files": [
             ".nora/writing/WRITING_STYLE.md",
@@ -87,7 +77,7 @@ Core commands:
 
 Optional module commands (each module is off until explicitly enabled):
   nora citation init|check|doctor    Citation/BibTeX audit module (run 'nora citation help')
-  nora literature init|doctor        Literature tracking module (run 'nora literature help')
+  nora literature <subcommand>       Literature backend: papers.yaml state, ingest/dedup/queue/mark/coverage/render (run 'nora literature help')
   nora writing init|doctor           Writing assistant module (run 'nora writing help')"""
 
 CITATION_CHECK_TEXT = """\
@@ -116,19 +106,6 @@ This module is primarily skill-driven. In your agent session, run:
   /nora-citation-auditor check-latex-citations
   /nora-citation-auditor report
   /nora-citation-auditor audit-claim-support""",
-    "literature": """\
-Nora literature manager
-
-Commands:
-  nora literature init    Create .nora/literature/ skeleton in the current project
-  nora literature doctor  Check whether literature module files exist (fails if .nora/literature/ is missing)
-
-This module is primarily skill-driven. In your agent session, run:
-  /nora-literature-manager search
-  /nora-literature-manager triage
-  /nora-literature-manager reading-queue
-  /nora-literature-manager paper-note
-  /nora-literature-manager related-work-map""",
     "writing": """\
 Nora writing assistant
 
@@ -457,21 +434,27 @@ def cmd_doctor() -> int:
         print()
         print("=== Optional modules ===")
 
-        for name, mod in MODULES.items():
+        for name in ["citation", "literature", "writing"]:
             mod_dir = root / ".nora" / name
-            if mod_dir.is_dir():
-                for f in mod["files"]:
-                    if (root / f).is_file():
-                        print(f"OK: {f}")
-                    else:
-                        print(f"WARNING: {f} missing ({name} module initialized but incomplete)")
-                for d in mod["dirs"]:
-                    if (root / d).is_dir():
-                        print(f"OK: {d}/")
-                    else:
-                        print(f"WARNING: {d}/ missing ({name} module initialized but incomplete)")
-            else:
+            if not mod_dir.is_dir():
                 print(f"INFO: {name} module not initialized. Run 'nora {name} init' if needed.")
+                continue
+            if name == "literature":
+                from . import literature as lit_mod
+                for line in lit_mod.doctor_lines(root)[0]:
+                    print(line)
+                continue
+            mod = MODULES[name]
+            for f in mod["files"]:
+                if (root / f).is_file():
+                    print(f"OK: {f}")
+                else:
+                    print(f"WARNING: {f} missing ({name} module initialized but incomplete)")
+            for d in mod["dirs"]:
+                if (root / d).is_dir():
+                    print(f"OK: {d}/")
+                else:
+                    print(f"WARNING: {d}/ missing ({name} module initialized but incomplete)")
     else:
         print("Not in a Nora-managed workspace (no .nora/ in the current directory or its ancestors).")
         print("Skipping project core state and optional module checks.")
@@ -499,12 +482,6 @@ def _module_init(name: str) -> int:
         src = home / "skills" / "nora-citation-auditor" / "templates" / "citation"
         for item in src.iterdir():
             shutil.copy(item, mod_dir / item.name)
-    elif name == "literature":
-        (mod_dir / "PAPER_NOTES").mkdir(parents=True)
-        src = home / "skills" / "nora-literature-manager" / "templates" / "literature"
-        for fname in ["LITERATURE_LOG.md", "READING_QUEUE.md", "RELATED_WORK_MAP.md"]:
-            shutil.copy(src / fname, mod_dir / fname)
-        shutil.copy(src / "PAPER_NOTES" / ".gitkeep", mod_dir / "PAPER_NOTES" / ".gitkeep")
     else:  # writing
         mod_dir.mkdir(parents=True)
         src = home / "skills" / "nora-writing-assistant" / "templates" / "writing"
@@ -583,10 +560,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_root()
     if cmd == "doctor":
         return cmd_doctor()
-    if cmd in ("citation", "literature", "writing", "lit"):
-        name = "literature" if cmd == "lit" else cmd
+    if cmd in ("literature", "lit"):
+        from . import literature as lit_mod
+        return lit_mod.cmd_literature(args[1:])
+    if cmd in ("citation", "writing"):
         subcmd = args[1] if len(args) > 1 else "help"
-        return cmd_module(name, subcmd)
+        return cmd_module(cmd, subcmd)
 
     print(f"Unknown command: {cmd}")
     print("Run: nora help")

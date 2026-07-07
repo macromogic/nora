@@ -4,36 +4,24 @@ Use this workflow to create or update a per-paper note under `.nora/literature/P
 
 ## Goal
 
-Produce a structured note capturing not just what the paper is, but why it matters to this project and how it might be used.
+A structured note capturing not just what the paper is, but why it matters to this project and how it might be used.
 
 ## Procedure
 
 ### 1. Identify the paper
 
-Get title, authors, year, venue, and DOI/arXiv/URL if available — from `READING_QUEUE.md` if it's already tracked, or from the user directly.
+The paper should already exist in `papers.yaml` (check `nora literature queue` / the ingest history). If it doesn't, ingest it first via the `search` workflow — notes attach to tracked papers, not free-floating titles.
 
 ### 2. Choose the file
 
-Use `PAPER_NOTES/<slug>.md`, where `<slug>` is a short, filesystem-safe identifier (prefer the BibTeX citation key if one exists and is known, otherwise `firstauthor-year-keyword`, e.g. `smith2020-attention.md`). If a note already exists for this paper, update it rather than creating a duplicate.
+Use `PAPER_NOTES/<id>.md`, where `<id>` is the paper's papers.yaml id (e.g. `lee2022probing.md`). One note per paper; update in place rather than creating duplicates.
 
 ### 3. Fill in the note
 
-Follow the structure below (also in `templates/literature/PAPER_NOTE_TEMPLATE.md`). Do not invent content for fields you don't have information for — write `unknown` or `not yet read` rather than guessing.
+Follow `templates/literature/PAPER_NOTE_TEMPLATE.md`. Do not invent content for fields you lack information for — write `unknown` or `not yet read` instead.
 
-- **Title / Authors / Year / Venue**
-- **DOI / arXiv / URL** (if available)
-- **Status** — one of the statuses in `SKILL.md`
-- **Relevance to project** — why this paper matters here, specifically
-- **Main contribution** — what the paper actually claims to contribute
-- **Method summary** — brief, only as detailed as useful for this project's purposes
-- **Evidence / results** — what the paper's results actually show, not a restatement of its abstract's claims
-- **Limitations** — the paper's own stated limitations, plus any you notice that are relevant to how we'd use it
-- **Possible use in our project** — concrete: background citation, baseline, method inspiration, contrast case, etc.
-- **Citation status** — is it in the `.bib` yet? Cited in `.tex` yet? (Don't assume — check, or say unknown.)
-- **Related Nora tasks or open loops** — link to relevant `.nora/NEXT_ACTIONS.md` items or `.nora/OPEN_LOOPS.md` entries if `.nora/` exists and a connection is clear; omit this field in standalone mode.
+The note duplicates nothing from `papers.yaml` except identity: status/roles live in the yaml (keep them there via `mark`); the note holds what yaml can't — contribution, method, evidence, limitations, how we'd use it.
 
 ### 4. Output
 
-Write the note file (creating or updating one file under `PAPER_NOTES/` is additive/scoped to that one paper, so — per `SKILL.md`'s core principles — write it directly rather than proposing a diff, then summarize what was written). If updating an existing note, preserve prior content the user hasn't asked to change; don't silently drop earlier notes when only one field is being updated.
-
-If the note's existence should also update `READING_QUEUE.md`'s status (e.g. finishing a note after reading), propose that queue update per `workflows/reading-queue.md` rather than changing it here silently.
+Write the note file directly (one file, one paper, additive — no confirmation gate), then summarize its path and contents. If writing the note coincides with a status change (e.g. finished reading), handle that via `workflows/reading-queue.md` — the gate applies there, not here.

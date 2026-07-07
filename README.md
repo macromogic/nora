@@ -21,7 +21,7 @@ Nora is a personal research workflow system for maintaining project context, rec
 
 - **Project management** (`nora-project-manager`) — bootstrap a new project, recover a stale one, summarize a session and propose state updates, and keep `AGENTS.md` in sync with the current template. This is the core of Nora; everything else is optional on top of it.
 - **Citation auditing** (`nora-citation-auditor`) — mechanical BibTeX/LaTeX hygiene checks (duplicate keys/DOIs, missing fields, missing/unused citations, fuzzy duplicate-title and arXiv/journal-duplicate candidates), plus a bounded, human-in-the-loop first pass at whether a citation appears to support a specific claim. Never edits `.bib`/`.tex`, never claims full scientific verification.
-- **Literature management** (`nora-literature-manager`) — search (if tools are available) or manually organize candidate papers, triage them, track a reading queue, take structured per-paper notes, and maintain a related-work map. Distinguishes candidates from papers actually read or cited.
+- **Literature management** (`nora-literature-manager` + `nora literature` CLI) — a structured backend (`papers.yaml` as the single source of truth) with CLI-enforced bookkeeping: ingest candidates from BibTeX/title lists/manual entry with built-in dedup, a conservative status machine (`candidate → queued → reading → read → proposed_cite → cited`/`rejected`) whose promotions are mechanically gated on user-approved decisions, role-based coverage reports, and generated reading-queue/related-work views. The skill supplies judgment (triage, notes, gap analysis); the CLI owns the state.
 - **Writing assistance** (`nora-writing-assistant`) — polish, restructure, and overclaim-check manuscript prose while preserving technical meaning and citation placement; diagnose why a paragraph isn't working; set up a project's writing style and phrase bank. Works with or without a Nora project.
 - **Current limitations** — no figure-generation tooling, no Zotero (or any external) write-back, no database backend, no background daemon or web dashboard, no full paper generation, no automatic manuscript rewriting, no automatic BibTeX edits, and no unsupervised claim verification.
 
@@ -52,7 +52,7 @@ Modules are opt-in. `nora new` only creates the core project state; `nora doctor
 - `nora install-skills` (alias `nora install-skill`) — symlink all four skills (`nora-project-manager`, `nora-citation-auditor`, `nora-literature-manager`, `nora-writing-assistant`) into Claude Code (`~/.claude/skills`) and Codex (`~/.codex/skills`), with short aliases `nora`, `nora-citation`, `nora-literature`, `nora-writing`.
 - `nora update` — pull the latest Nora CLI and skills from git (refuses if `$NORA_HOME` has uncommitted changes); if the `AGENTS.md` template changed, prints a note to run `/nora sync-agents` in projects you want to sync.
 - `nora citation init|check|doctor` — citation/BibTeX audit module; see `nora-citation-auditor` below.
-- `nora literature init|doctor` — literature tracking module; see `nora-literature-manager` below. Otherwise skill-driven (`/nora-literature-manager <workflow>`).
+- `nora literature <subcommand>` (alias `nora lit`) — structured literature backend around `.nora/literature/papers.yaml`: `init`, `ingest` (`--bibtex FILE` / `--titles FILE` / manual `--title ...`, with DOI/arXiv/normalized-title dedup on entry), `dedup` (reports likely duplicates, never merges), `queue`, `mark <id> [status] [--role ...] [--note ...]` (the only status-transition entry point — promotions to `read`/`proposed_cite`/`cited`/`rejected` are refused without `--decision <approved id>` from `.nora/decisions/decisions.yaml`), `coverage` (role × status report with gaps), `render` (regenerate the markdown views), and `doctor` (parses papers.yaml and cross-checks the decision gate). See `nora-literature-manager` below for the judgment side.
 - `nora writing init|doctor` — writing assistant module; see `nora-writing-assistant` below. Otherwise skill-driven (`/nora-writing-assistant <workflow>`).
 
 Each `<module> doctor` fails with a clear error and an init suggestion if that module's `.nora/<module>/` directory doesn't exist — unlike the default `nora doctor`, which only warns.
@@ -87,19 +87,19 @@ Mechanical findings are tagged `AUTO_SAFE`, `REVIEW_REQUIRED`, `BLOCKED`, or `DO
 
 ## Skill: `nora-literature-manager` (alias `/nora-literature`)
 
-Search, triage, track, and organize research literature — literature *workflow management*, not a full search API client.
+Track, triage, and organize research literature on top of the `nora literature` CLI backend — the skill judges, the CLI keeps the books.
 
 Five workflows:
 
-- `search` — find candidate papers, using web/search tools if available in the session, or by organizing manually supplied titles/DOIs/BibTeX/PDFs/notes if not
-- `triage` — review candidates and decide `screened` / `to-read` / `rejected`, always with a recorded rationale
-- `reading-queue` — view/update the reading queue by status, with a required relevance note per entry
-- `paper-note` — create/update a structured per-paper note under `.nora/literature/PAPER_NOTES/`
-- `related-work-map` — organize tracked papers by topic, method, claim, or comparison axis
+- `search` — collect candidate papers (web/search tools if available, or user-supplied titles/DOIs/BibTeX/abstracts) and ingest them via `nora literature ingest`
+- `triage` — judge candidates: assign roles (`mark --role`) and relevance notes (`mark --note`), queue what's worth reading; rejections go through the decision gate
+- `reading-queue` — view/advance the queue through the status machine; gated promotions are proposed in `decisions.yaml` and applied only after user approval
+- `paper-note` — create/update a structured per-paper note under `.nora/literature/PAPER_NOTES/<id>.md`
+- `related-work-map` — interpret the `coverage` report (which gaps matter and why) and regenerate the views via `render`
 
 Invoke with `/nora-literature-manager <workflow>` or the short alias `/nora-literature <workflow>`.
 
-Paper statuses: `candidate` → `screened` → `to-read` → `reading` → `read` → `cited` (or `rejected` / `replaced` at any point). The skill keeps candidates clearly distinct from papers actually read or cited — it never promotes a status without that having actually happened, and it never writes to `.bib`/`.tex` itself.
+Paper statuses: `candidate → queued → reading → read → proposed_cite → cited` (or `rejected`, gated, from anywhere). Free transitions among `candidate`/`queued`/`reading` are agent-safe bookkeeping; every promotion to `read`/`proposed_cite`/`cited`/`rejected` requires a user-approved decision — and the CLI enforces that mechanically rather than trusting the agent. The skill never writes to `.bib`/`.tex`, and never edits `papers.yaml` by hand.
 
 Works standalone (no `.nora/`) the same way `nora-citation-auditor` does: it says so explicitly and writes only to `.nora/literature/`. In a full Nora project, it also reads `.nora/CONTEXT_BRIEF.md`/`PROJECT_STATE.yaml` to ground relevance judgments.
 
@@ -139,10 +139,10 @@ Each project may contain:
     CITATION_REVIEW_QUEUE.yaml
     CLAIM_SUPPORT_AUDIT.md
   literature/                  # optional — enabled via `nora literature init`
-    LITERATURE_LOG.md
-    READING_QUEUE.md
-    RELATED_WORK_MAP.md
-    PAPER_NOTES/
+    papers.yaml                #   single source of truth — written only by the nora CLI
+    READING_QUEUE.md           #   generated view (`nora literature render`)
+    RELATED_WORK_MAP.md        #   generated view (`nora literature render`)
+    PAPER_NOTES/               #   one note per paper, named <id>.md
   writing/                     # optional — enabled via `nora writing init`
     WRITING_STYLE.md
     STYLE_NOTES.md

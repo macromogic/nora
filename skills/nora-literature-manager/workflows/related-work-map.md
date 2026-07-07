@@ -1,42 +1,27 @@
 # Workflow: Related Work Map
 
-Use this workflow to organize tracked papers by topic, method, claim, or comparison axis.
+Use this workflow to assess role coverage and keep the generated related-work view current.
 
 ## Goal
 
-Keep `RELATED_WORK_MAP.md` a useful map of how the papers in `READING_QUEUE.md`/`PAPER_NOTES/` relate to each other and to the project — not just a re-listing of the reading queue.
+A clear picture of how tracked papers cover the project's related-work roles, where the gaps are, and an up-to-date `RELATED_WORK_MAP.md` — generated, never hand-curated.
 
 ## Procedure
 
-### 1. Determine the organizing axis
+### 1. Read the coverage report
 
-Ask the user, unless it's already clear from context, which axis to organize by (one map can use more than one axis in different sections):
+Run `nora literature coverage`: role × status counts, unassigned papers, and gap roles. This report — not the raw papers.yaml — is the working input.
 
-- **Topic**: papers grouped by subject area.
-- **Method**: papers grouped by technique/approach.
-- **Claim**: papers grouped by which of the project's claims they relate to or support.
-- **Comparison**: papers grouped by what they're a baseline/alternative/contrast to in this project.
+### 2. Interpret
 
-### 2. Gather source material
+- **Unassigned papers**: triage debt — assign roles via the `triage` workflow (`mark --role`).
+- **Gap roles**: judge which gaps actually matter for this project (a tool paper may never need a `threat_model` entry; a security paper without one is a real hole). Say which gaps you'd fill and why; filling them is a `search` follow-up.
+- **Role imbalances**: e.g. many `background`, zero `competing_system` before a paper submission is a warning sign worth surfacing.
 
-Pull from `READING_QUEUE.md` (for what's tracked) and `PAPER_NOTES/` (for papers with enough depth to place meaningfully — a bare `candidate` with no note is usually too thin to map yet; note it as unplaced rather than forcing a category).
+### 3. Regenerate the view
 
-### 3. Update the map
-
-- Preserve existing categories and placements the user hasn't asked to change.
-- Add new papers to existing categories where they fit, or propose a new category if none fits.
-- For each entry, keep it to a one-line reason for its placement (not a repeat of the full paper note) — link to the paper note for detail.
-- Flag papers that don't clearly fit any existing category instead of forcing a placement.
+Run `nora literature render` to refresh `RELATED_WORK_MAP.md` (and `READING_QUEUE.md`). The view is grouped by role with status tags; it is read-only output — any correction goes through `mark`, then render again.
 
 ### 4. Output
 
-This changes an existing, curated document, so propose the diff rather than writing silently:
-
-```markdown
-## Proposed Nora literature updates
-
-### RELATED_WORK_MAP.md
-...
-```
-
-Apply only on user confirmation.
+End with the coverage report, your gap assessment (which gaps matter, which don't, and why), and confirmation that `render` was run.

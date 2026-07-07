@@ -1,39 +1,26 @@
 # Workflow: Reading Queue
 
-Use this workflow to view or update the reading queue.
+Use this workflow to view the reading queue or advance papers through the status machine.
 
 ## Goal
 
-Keep `READING_QUEUE.md` an accurate, status-grouped view of what's queued, in progress, and finished, each with a relevance note — and prompt the natural next step when a paper's status changes.
+`papers.yaml` reflects reality: what's queued, what's being read, what's finished — with every gated promotion carrying an approved decision.
 
 ## Procedure
 
 ### 1. Determine intent
 
-- If the user just wants to see the queue: read `READING_QUEUE.md` and summarize it grouped by status, in the lifecycle order from `SKILL.md`'s Paper statuses section.
-- If the user wants to update one or more entries (e.g. "mark X as read", "move Y to reading", "reprioritize"): proceed to step 2.
+- Just viewing: run `nora literature queue` (and `nora literature render` if the user wants the markdown view refreshed), summarize, done.
+- Updating statuses: proceed.
 
 ### 2. Apply status changes
 
-For each requested change:
-
-- Validate the new status is one of the defined statuses.
-- If moving to `read`: prompt the user to create a paper note via `paper-note` if one doesn't exist yet under `PAPER_NOTES/` — don't force it, but don't let papers silently pile up as `read` with no note either.
-- If moving to `cited`: confirm with the user that the paper is actually cited in the project's `.tex`/`.bib` (this skill doesn't verify that itself — if `nora-citation-auditor` is available, suggest running `check-latex-citations` to confirm). Do not assign `cited` on the assumption that it will be cited later.
-- If moving to `rejected` or `replaced`: require a one-line reason, logged to `LITERATURE_LOG.md`.
+- Free transitions (`candidate`/`queued`/`reading`, any direction): run `nora literature mark <id> <status>` directly.
+- Finished reading (**gated**: `read`): append a proposal to `.nora/decisions/decisions.yaml` (typically one entry covering the session's finished papers, `type: proposed_read`), wait for approval, then `mark <id> read --decision <id>`. Prompt for a `paper-note` at the same time — don't let papers pile up as `read` with no note.
+- Proposing a citation (**gated**: `proposed_cite`): same gate, `type: proposed_cite`; include in the proposal *which claim or section* the citation would support.
+- Marking as cited (**gated**: `cited`): only after the citation actually exists in `.tex`/`.bib` — verify it (or suggest `nora-citation-auditor`'s `check-latex-citations`), then gate as above.
+- If the CLI refuses a transition, that's the gate working: surface the refusal to the user, don't work around it.
 
 ### 3. Output
 
-This changes existing entries, so propose the diff rather than writing silently:
-
-```markdown
-## Proposed Nora literature updates
-
-### READING_QUEUE.md
-...
-
-### LITERATURE_LOG.md (if a rejection/replacement reason was recorded)
-...
-```
-
-Apply only on user confirmation.
+End with `nora literature queue` output, what changed this session, and any pending proposals awaiting the user.

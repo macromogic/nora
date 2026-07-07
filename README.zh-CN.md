@@ -23,7 +23,7 @@ nora doctor           # 检查全局安装 + 项目状态 + 可选模块
 
 # 按需启用可选模块（都不是必需的）:
 nora citation init    # 引用/BibTeX 审计
-nora literature init  # 文献追踪
+nora literature init  # 文献追踪(papers.yaml 结构化状态 + 决策门强制)
 nora writing init     # 写作辅助
 ```
 
