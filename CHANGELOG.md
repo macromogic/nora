@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-07-08
+
+Alpha. This completes the system-centric main line (Stages 0–8): all three
+optional modules now pair a deterministic CLI backend with a judgment-only
+skill.
+
+### Added
+
+- `nora writing lint [--tex FILE ...] [--write]` — mechanical prose guardrails over `.tex` sources, all read-only (the writing domain has no auto-apply path — quote direction, punctuation, and reference style are context-sensitive enough that every change goes through a human):
+  - `\work[...]`-style placeholder commands: `BLOCKED` (exit 1) — agent-misuse artifacts; removed, never formalized into real macros
+  - leftover draft markup and markers: `\hl`/`\underline`/`\uline`/`\sout`/`\marginpar`, `TODO`/`FIXME`/`XXX`, and `??` (usually a broken `\ref`)
+  - hand-written `Figure~\ref{...}`-style references and hard-coded "Figure 3" numbers — use `\cref` (adding cleveref is itself a user-approval item)
+  - straight `"..."` quotes in prose — use `` ``...'' ``; code contexts (verbatim-family environments, `\verb`, `\lstinline`, `\texttt`) are exempt
+  - bold/italic overuse (one summary finding per file over a word-count-scaled threshold), overlong sentences (>40 words, explicitly heuristic), and non-ASCII punctuation with suggested ASCII/LaTeX replacements (letters like naïve/Müller are untouched)
+  - comments are stripped first; `--write` saves `.nora/writing/LINT_REPORT.md`
+- `nora writing init` now also creates `LATEX_CONVENTIONS.md` (project LaTeX conventions, the mechanical ones cross-referenced with lint) and `REVISION_CHECKLIST.md` (pre-submission pass: mechanical CLI steps, then judgment workflows)
+- `AGENTS.md` template approval list gains: introducing a new LaTeX package or macro (including formalizing placeholder commands) requires explicit user approval
+- Test suite grew from 113 to 120: every check against seeded defects, code-context exemptions, comment stripping, blocking exit code, template completeness
+
+### Changed
+
+- `nora-writing-assistant` skill: `overclaim-check` clears the mechanical layer via `nora writing lint` before the semantic pass; SKILL.md documents the CLI/skill division of labor
+- `nora writing` subcommands are parsed with argparse; the last generic module machinery in the CLI (`cmd_module`) is retired — all three modules now own their command trees
+
 ## [0.6.0] - 2026-07-08
 
 Alpha. The citation module now follows the same shape as literature:

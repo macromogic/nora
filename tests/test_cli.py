@@ -368,12 +368,10 @@ def test_module_doctor_incomplete_exits_1(env, capsys, mod):
     assert "initialized but incomplete" in out
 
 
-def test_writing_help_on_unknown_subcommand(env, capsys):
+def test_writing_help_and_argparse_usage_error(env, capsys):
     assert run("writing") == 0
-    help_out = capsys.readouterr().out
-    assert "nora writing init" in help_out
-    assert run("writing", "bogus") == 0
-    assert capsys.readouterr().out == help_out
+    assert "nora writing lint" in capsys.readouterr().out
+    assert run("writing", "bogus") == 2  # argparse usage error
 
 
 def test_citation_help_and_argparse_usage_error(env, capsys):
@@ -970,6 +968,112 @@ def test_citation_lint_no_sources_found(env, capsys):
     capsys.readouterr()
     assert run("citation", "lint") == 1
     assert "No .bib or .tex files found" in capsys.readouterr().out
+
+
+# --- writing lint (Stage 8) ----------------------------------------------------
+
+WRITING_TEX = r"""\documentclass{article}
+\begin{document}
+\section{Intro}
+We defer details~\work[cite the survey].
+The results are shown in Figure~\ref{fig:x} and Table \ref{tab:y}.
+As shown in Figure 3, accuracy drops. % TODO tune this
+The broken link (see ??) needs fixing. FIXME
+She said "attention is all you need" loudly.
+This uses \hl{highlighting} and,中文标点。and an em—dash and ellipsis…
+\textbf{a}\textbf{b}\textbf{c}\textbf{d}\emph{e}\textit{f}
+This extremely long sentence keeps going with word after word after word after word after word
+after word after word after word after word after word after word after word after word after
+word after word after word after word until it finally has more than forty words in total here.
+\begin{verbatim}
+print("quotes in code are fine")
+\end{verbatim}
+Inline \verb|"also fine"| and \texttt{"this too"} and \cref{fig:x} are clean.
+\end{document}
+"""
+
+# the fullwidth comma is built by codepoint — an ASCII lookalike in the
+# fixture would silently test nothing
+WRITING_TEX = WRITING_TEX.replace("and,", "and" + "，")
+
+
+def writing_project(capsys):
+    run("new")
+    run("writing", "init")
+    Path("draft.tex").write_text(WRITING_TEX)
+    capsys.readouterr()
+
+
+def test_writing_lint_finds_all_seeded_defects(env, capsys):
+    writing_project(capsys)
+    assert run("writing", "lint") == 1  # \work placeholder is blocking
+    out = capsys.readouterr().out
+    assert "BLOCKED [work_placeholder]" in out
+    assert "REVIEW_REQUIRED [handwritten_ref] 'Figure \\ref{...}'" in out
+    assert "'Table \\ref{...}'" in out
+    assert "hard-coded 'Figure 3'" in out
+    assert "leftover marker '??'" in out
+    assert "leftover marker 'FIXME'" in out
+    assert "\\hl at" in out
+    assert 'straight "..." quotes' in out
+    for cp in (0xFF0C, 0x3002, 0x2014, 0x2026):  # ， 。 — …
+        assert f"non-ASCII punctuation '{chr(cp)}'" in out, hex(cp)
+    assert "emphasis_overuse" in out and "6 \\textbf/\\textit/\\emph" in out
+    assert "long_sentence" in out and "heuristic:" in out
+    assert "TODO" not in out.split("leftover marker 'FIXME'")[1].split("\n")[0]  # comment stripped
+    assert "no auto-apply path" in out
+
+
+def test_writing_lint_code_contexts_exempt_from_quotes(env, capsys):
+    writing_project(capsys)
+    Path("draft.tex").write_text(
+        "\\begin{verbatim}\n\"x\"\n\\end{verbatim}\n"
+        "\\verb|\"y\"| and \\texttt{\"z\"} and \\lstinline{\"w\"}\n")
+    assert run("writing", "lint") == 0
+    out = capsys.readouterr().out
+    assert "straight" not in out
+
+
+def test_writing_lint_clean_file(env, capsys):
+    writing_project(capsys)
+    Path("draft.tex").write_text(
+        "\\section{Intro}\nResults appear in \\cref{fig:x}. We use ``real quotes''.\n")
+    assert run("writing", "lint") == 0
+    assert "No findings" in capsys.readouterr().out
+
+
+def test_writing_lint_todo_in_comment_ignored(env, capsys):
+    writing_project(capsys)
+    Path("draft.tex").write_text("Fine text here. % TODO invisible\n")
+    assert run("writing", "lint") == 0
+    assert "leftover marker" not in capsys.readouterr().out
+
+
+def test_writing_lint_write_report(env, capsys):
+    writing_project(capsys)
+    assert run("writing", "lint", "--write") == 1
+    report = Path(".nora/writing/LINT_REPORT.md").read_text()
+    assert report.startswith("<!-- Generated")
+    assert "work_placeholder" in report
+
+
+def test_writing_lint_no_tex_found(env, capsys):
+    run("new")
+    capsys.readouterr()
+    assert run("writing", "lint") == 1
+    assert "No .tex files found" in capsys.readouterr().out
+
+
+def test_writing_init_includes_new_templates(env, capsys):
+    run("new")
+    capsys.readouterr()
+    assert run("writing", "init") == 0
+    for f in ["WRITING_STYLE.md", "STYLE_NOTES.md", "PHRASE_BANK.md",
+              "LATEX_CONVENTIONS.md", "REVISION_CHECKLIST.md"]:
+        assert (Path(".nora/writing") / f).is_file(), f
+    capsys.readouterr()
+    assert run("writing", "doctor") == 0
+    assert "looks OK" in capsys.readouterr().out
 
 
 # --- update refusal paths ----------------------------------------------------

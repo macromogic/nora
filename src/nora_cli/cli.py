@@ -56,6 +56,8 @@ MODULES = {
             ".nora/writing/WRITING_STYLE.md",
             ".nora/writing/STYLE_NOTES.md",
             ".nora/writing/PHRASE_BANK.md",
+            ".nora/writing/LATEX_CONVENTIONS.md",
+            ".nora/writing/REVISION_CHECKLIST.md",
         ],
         "dirs": [],
         "state_name": "Writing",
@@ -78,24 +80,7 @@ Core commands:
 Optional module commands (each module is off until explicitly enabled):
   nora citation <subcommand>         Citation hygiene backend: lint/normalize/fix/keygen over .bib/.tex (run 'nora citation help')
   nora literature <subcommand>       Literature backend: papers.yaml state, ingest/dedup/queue/mark/coverage/render (run 'nora literature help')
-  nora writing init|doctor           Writing assistant module (run 'nora writing help')"""
-
-MODULE_HELP = {
-    "writing": """\
-Nora writing assistant
-
-Commands:
-  nora writing init    Create .nora/writing/ skeleton in the current project
-  nora writing doctor  Check whether writing module files exist (fails if .nora/writing/ is missing)
-
-This module is primarily skill-driven. In your agent session, run:
-  /nora-writing-assistant polish
-  /nora-writing-assistant restructure
-  /nora-writing-assistant overclaim-check
-  /nora-writing-assistant paragraph-diagnosis
-  /nora-writing-assistant style-profile""",
-}
-
+  nora writing <subcommand>          Writing guardrails: lint over .tex prose (run 'nora writing help')"""
 
 def nora_home() -> Path:
     return Path(os.environ.get("NORA_HOME") or Path.home() / "nora")
@@ -442,73 +427,6 @@ def cmd_doctor() -> int:
     return 1
 
 
-def _module_init(name: str) -> int:
-    home = nora_home()
-    mod = MODULES[name]
-    base = find_workspace_root() or Path.cwd()
-    mod_dir = base / ".nora" / name
-
-    if mod_dir.is_dir():
-        print(f"{mod['state_name']} state already exists: .nora/{name}/")
-        return 0
-
-    # citation/literature live in their own modules; only writing remains here
-    mod_dir.mkdir(parents=True)
-    src = home / "skills" / "nora-writing-assistant" / "templates" / "writing"
-    for item in src.iterdir():
-        shutil.copy(item, mod_dir / item.name)
-
-    if not (base / ".nora" / "PROJECT_STATE.yaml").is_file():
-        print("Note: no full Nora project state found (.nora/PROJECT_STATE.yaml missing).")
-        print(f"Initialized {name}-only (standalone) state in:")
-    else:
-        print(f"Initialized {name} state in:")
-    print(f"  {mod_dir}")
-    return 0
-
-
-def _module_doctor(name: str) -> int:
-    mod = MODULES[name]
-    base = find_workspace_root() or Path.cwd()
-    mod_dir = base / ".nora" / name
-
-    if not mod_dir.is_dir():
-        print(f"ERROR: .nora/{name}/ not found.")
-        print(f"Run 'nora {name} init' first.")
-        return 1
-
-    print(mod["doctor_intro"])
-
-    missing = False
-    for f in mod["files"]:
-        if (base / f).is_file():
-            print(f"OK: {f}")
-        else:
-            print(f"MISSING: {f}")
-            missing = True
-    for d in mod["dirs"]:
-        if (base / d).is_dir():
-            print(f"OK: {d}/")
-        else:
-            print(f"MISSING: {d}/")
-            missing = True
-
-    if not missing:
-        print(mod["doctor_ok"])
-        return 0
-    print(mod["doctor_incomplete"])
-    return 1
-
-
-def cmd_module(name: str, subcmd: str) -> int:
-    if subcmd == "init":
-        return _module_init(name)
-    if subcmd == "doctor":
-        return _module_doctor(name)
-    print(MODULE_HELP[name])
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     cmd = args[0] if args else "help"
@@ -532,8 +450,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import citation as cit_mod
         return cit_mod.cmd_citation(args[1:])
     if cmd == "writing":
-        subcmd = args[1] if len(args) > 1 else "help"
-        return cmd_module(cmd, subcmd)
+        from . import writing as wri_mod
+        return wri_mod.cmd_writing(args[1:])
 
     print(f"Unknown command: {cmd}")
     print("Run: nora help")

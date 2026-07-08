@@ -12,7 +12,14 @@ Find instances of overly strong or promotional phrasing, propose more cautious a
 
 Take the passage, section, or file the user specifies. This workflow can reasonably run over a larger scope than `polish`/`restructure` since it's read-only (findings, not automatic rewrites) — but still ask if scope is ambiguous.
 
-### 2. Scan for overclaiming patterns
+### 2. Clear the mechanical layer first
+
+Run `nora writing lint` (since 0.7.0): placeholder commands, leftover draft
+markers, hand-written references, straight quotes, non-ASCII punctuation, and
+long-sentence/emphasis heuristics are scripted — don't re-derive them by
+reading. Relay its findings, then spend the agent's attention on what follows.
+
+### 2b. Scan for overclaiming patterns
 
 Look for:
 

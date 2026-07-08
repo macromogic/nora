@@ -35,6 +35,7 @@ Before working on this project:
 - Running `nora new` or any `nora <module> init`.
 - Overwriting or restructuring Nora state files (appending session updates is fine when asked).
 - Any edit to `.bib`/`.tex` beyond what the user asked for in this session.
+- Introducing a new LaTeX package or macro (including formalizing placeholder commands like `\work[...]` — those are removed, never defined).
 
 ## Preferred skills
 
