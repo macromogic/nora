@@ -26,7 +26,7 @@ FIELDS = [
 LIST_FIELDS = {"authors", "roles"}
 INT_FIELDS = {"year"}
 
-SOURCES = ["manual", "bibtex", "title_list"]
+SOURCES = ["manual", "bibtex", "title_list", "search"]
 
 STATUSES = ["candidate", "queued", "reading", "read", "proposed_cite", "cited", "rejected"]
 

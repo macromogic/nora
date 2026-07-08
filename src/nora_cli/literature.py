@@ -18,12 +18,15 @@ from datetime import date
 from pathlib import Path
 
 from . import papers as ps
+from . import sources as src
 
 HELP_TEXT = """\
 Nora literature manager
 
 Commands:
   nora literature init      Create .nora/literature/ with an empty papers.yaml
+  nora literature search    Query external sources (--query "..."; arXiv/OpenAlex/S2/Crossref/DBLP,
+                            keyless, cached permanently, --refresh to re-fetch); hits enter candidate state
   nora literature ingest    Add candidate papers (--bibtex FILE | --titles FILE | --title ... manual entry)
   nora literature dedup     Report likely duplicates in papers.yaml (never merges automatically)
   nora literature queue     List papers in the reading queue (status queued/reading)
@@ -206,6 +209,94 @@ def cmd_ingest(base: Path, args) -> int:
     return 0
 
 
+def _cache_dir(base: Path) -> Path:
+    return _lit_dir(base) / "cache"
+
+
+def write_top_candidates(base: Path, papers: list[dict]) -> Path:
+    """Generated view: candidate papers ranked by mechanical signals only
+    (citations / recency / how many sources agreed — from the search cache).
+    Relevance judgment stays with triage; this file just orders the pile."""
+    signals = src.cached_signals(_cache_dir(base))
+
+    def paper_signals(p: dict):
+        for key in ([("doi", ps.normalize_doi(p["doi"]))] if p["doi"] else []) + \
+                   ([("arxiv", p["arxiv"])] if p["arxiv"] else []) + \
+                   [("title", ps.normalize_title(p["title"]))]:
+            if key in signals:
+                return signals[key]
+        return {"citations": None, "sources": set()}
+
+    candidates = [(p, paper_signals(p)) for p in papers if p["status"] == "candidate"]
+    candidates.sort(key=lambda x: (
+        -(x[1]["citations"] if x[1]["citations"] is not None else -1),
+        -(x[0]["year"] if x[0]["year"] is not None else 0),
+        x[0]["id"],
+    ))
+
+    lines = [
+        GENERATED_HEADER, "",
+        "# Top Candidates", "",
+        "Ranked by mechanical signals only (citation count, recency, source agreement).",
+        "Relevance judgment belongs to the triage workflow, not this file.", "",
+    ]
+    if not candidates:
+        lines.append("(no candidate papers)")
+    for p, sig in candidates:
+        year = p["year"] if p["year"] is not None else "n.d."
+        venue = f", {p['venue']}" if p["venue"] else ""
+        parts = []
+        if sig["citations"] is not None:
+            parts.append(f"citations: {sig['citations']}")
+        if sig["sources"]:
+            parts.append(f"sources: {', '.join(sorted(sig['sources']))}")
+        detail = f"\n  - signals: {'; '.join(parts)}" if parts else ""
+        note = f"\n  - {p['note']}" if p["note"] else ""
+        lines.append(f"- **{p['id']}** — {p['title']} ({year}{venue}){detail}{note}")
+    lines.append("")
+    path = _lit_dir(base) / "TOP_CANDIDATES.md"
+    path.write_text("\n".join(lines))
+    return path
+
+
+def cmd_search(base: Path, args) -> int:
+    try:
+        papers = ps.load(base)
+    except ps.PapersError as e:
+        print(f"ERROR: {e}")
+        return 1
+
+    per_source, warnings = src.search_all(
+        args.query, args.limit, _cache_dir(base),
+        only=args.source, refresh=args.refresh)
+    for w in warnings:
+        print(f"WARNING: {w} (source skipped)")
+    if not per_source:
+        print("All sources failed or were skipped; nothing to ingest.")
+        print("Check network access, or retry later — results are cached once a source answers.")
+        return 1
+
+    added, skipped = [], []
+    for hit in src.merge_hits(per_source):
+        existing = _match_existing(papers, hit)
+        if existing:
+            skipped.append((hit["title"], existing["id"]))
+        else:
+            added.append(_add_paper(papers, hit, "search"))
+
+    if added:
+        ps.save(base, papers)
+    top = write_top_candidates(base, papers)
+    for paper in added:
+        print(f"added: {paper['id']}  {paper['title']} [candidate]")
+    for title, dup_id in skipped:
+        print(f"skipped (already present as {dup_id}): {title}")
+    queried = ", ".join(name for name, _ in per_source)
+    print(f"{len(added)} added, {len(skipped)} skipped from {queried}. Total papers: {len(papers)}.")
+    print(f"Ranked view: {top}")
+    return 0
+
+
 def cmd_dedup(base: Path) -> int:
     try:
         papers = ps.load(base)
@@ -333,19 +424,14 @@ def cmd_mark(base: Path, paper_id: str, status, decision, roles=None, note=None)
     return 0
 
 
-def cmd_coverage(base: Path) -> int:
-    try:
-        papers = ps.load(base)
-    except ps.PapersError as e:
-        print(f"ERROR: {e}")
-        return 1
-    print(f"Papers: {len(papers)} total")
+def _coverage_lines(papers: list[dict]) -> list[str]:
+    lines = [f"Papers: {len(papers)} total"]
     counts = {s: 0 for s in ps.STATUSES}
     for p in papers:
         counts[p["status"]] += 1
-    print("  " + "  ".join(f"{s}: {counts[s]}" for s in ps.STATUSES))
-    print()
-    print("Role coverage (a paper can hold several roles):")
+    lines.append("  " + "  ".join(f"{s}: {counts[s]}" for s in ps.STATUSES))
+    lines.append("")
+    lines.append("Role coverage (a paper can hold several roles):")
     unassigned = 0
     role_counts = {r: 0 for r in ps.ROLES}
     for p in papers:
@@ -356,13 +442,30 @@ def cmd_coverage(base: Path) -> int:
                 role_counts[r] += 1
     for r in ps.ROLES:
         if role_counts[r]:
-            print(f"  {r}: {role_counts[r]}")
+            lines.append(f"  {r}: {role_counts[r]}")
     if unassigned:
-        print(f"  unassigned (no roles yet): {unassigned}")
+        lines.append(f"  unassigned (no roles yet): {unassigned}")
     gaps = [r for r in ps.ROLES if not role_counts[r] and r != "other"]
     if gaps:
+        lines.append("")
+        lines.append(f"Gaps (roles with no papers): {', '.join(gaps)}")
+    return lines
+
+
+def cmd_coverage(base: Path, write: bool = False) -> int:
+    try:
+        papers = ps.load(base)
+    except ps.PapersError as e:
+        print(f"ERROR: {e}")
+        return 1
+    lines = _coverage_lines(papers)
+    print("\n".join(lines))
+    if write:
+        path = _lit_dir(base) / "COVERAGE_REPORT.md"
+        path.write_text("\n".join(
+            [GENERATED_HEADER, "", "# Coverage Report", "", "```text"] + lines + ["```", ""]))
         print()
-        print(f"Gaps (roles with no papers): {', '.join(gaps)}")
+        print(f"Written: {path}")
     return 0
 
 
@@ -404,10 +507,12 @@ def cmd_render(base: Path) -> int:
         map_lines += [line(p) + f" — `{p['status']}`" for p in unassigned]
         map_lines.append("")
     (lit / "RELATED_WORK_MAP.md").write_text("\n".join(map_lines))
+    top = write_top_candidates(base, papers)
 
     print("Rendered from papers.yaml:")
     print(f"  {lit / 'READING_QUEUE.md'}")
     print(f"  {lit / 'RELATED_WORK_MAP.md'}")
+    print(f"  {top}")
     return 0
 
 
@@ -487,6 +592,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nora literature", add_help=True)
     sub = parser.add_subparsers(dest="subcmd")
 
+    search = sub.add_parser("search", help="search external sources for candidate papers")
+    search.add_argument("--query", required=True)
+    search.add_argument("--source", choices=src.SOURCE_NAMES, help="restrict to one source")
+    search.add_argument("--limit", type=int, default=10)
+    search.add_argument("--refresh", action="store_true",
+                        help="bypass the permanent response cache")
+
     ingest = sub.add_parser("ingest", help="add candidate papers")
     ingest.add_argument("--bibtex", metavar="FILE")
     ingest.add_argument("--titles", metavar="FILE")
@@ -512,7 +624,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help="replace the paper's roles (repeatable)")
     mark.add_argument("--note", help="replace the paper's one-line relevance note")
 
-    sub.add_parser("coverage", help="role x status coverage report")
+    coverage = sub.add_parser("coverage", help="role x status coverage report")
+    coverage.add_argument("--write", action="store_true",
+                          help="also write COVERAGE_REPORT.md")
     sub.add_parser("render", help="regenerate markdown views")
     sub.add_parser("init", help="create .nora/literature/")
     sub.add_parser("doctor", help="check literature state")
@@ -532,6 +646,8 @@ def cmd_literature(argv: list[str]) -> int:
     base = _base()
     if args.subcmd == "init":
         return cmd_init(base)
+    if args.subcmd == "search":
+        return cmd_search(base, args)
     if args.subcmd == "ingest":
         return cmd_ingest(base, args)
     if args.subcmd == "dedup":
@@ -541,7 +657,7 @@ def cmd_literature(argv: list[str]) -> int:
     if args.subcmd == "mark":
         return cmd_mark(base, args.id, args.status, args.decision, args.role, args.note)
     if args.subcmd == "coverage":
-        return cmd_coverage(base)
+        return cmd_coverage(base, args.write)
     if args.subcmd == "render":
         return cmd_render(base)
     if args.subcmd == "doctor":

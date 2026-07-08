@@ -670,6 +670,89 @@ def test_literature_unknown_subcommand_exits_2_with_usage(env, capsys):
     assert run("literature", "bogus") == 2  # argparse usage error
 
 
+# --- literature search (external sources, mocked) ------------------------------
+
+def _mock_single_source(monkeypatch, hits):
+    """Make every source except dblp fail; dblp returns `hits`."""
+    from nora_cli import sources as src
+
+    def fake_search_all(query, limit, cache_dir, only=None, refresh=False):
+        return [("dblp", hits)], ["arxiv: timed out"]
+
+    monkeypatch.setattr(src, "search_all", fake_search_all)
+
+
+SEARCH_HIT = {
+    "title": "Instruction Drift in Long Conversations", "authors": ["Erin Chen"],
+    "year": 2023, "venue": "ACL", "doi": "10.1000/drift.1", "arxiv": None,
+    "url": "https://example.org", "citations": 41,
+}
+
+
+def test_literature_search_adds_candidates_and_top_view(env, capsys, monkeypatch):
+    lit_project(capsys)
+    _mock_single_source(monkeypatch, [SEARCH_HIT])
+    assert run("literature", "search", "--query", "instruction drift") == 0
+    out = capsys.readouterr().out
+    assert "WARNING: arxiv: timed out (source skipped)" in out
+    assert "added: chen2023instruction" in out
+    text = Path(".nora/literature/papers.yaml").read_text()
+    assert 'source: "search"' in text
+    top = Path(".nora/literature/TOP_CANDIDATES.md").read_text()
+    assert top.startswith("<!-- Generated")
+    assert "chen2023instruction" in top
+
+
+def test_literature_search_dedups_against_existing(env, capsys, monkeypatch):
+    lit_project(capsys)
+    ingest_one(capsys, title="Instruction Drift in Long Conversations", author="Chen, Erin")
+    _mock_single_source(monkeypatch, [SEARCH_HIT])
+    assert run("literature", "search", "--query", "instruction drift") == 0
+    out = capsys.readouterr().out
+    assert "0 added, 1 skipped" in out
+
+
+def test_literature_search_all_sources_failed(env, capsys, monkeypatch):
+    lit_project(capsys)
+    from nora_cli import sources as src
+
+    def all_fail(query, limit, cache_dir, only=None, refresh=False):
+        return [], [f"{n}: unreachable" for n in src.SOURCE_NAMES]
+
+    monkeypatch.setattr(src, "search_all", all_fail)
+    assert run("literature", "search", "--query", "anything") == 1
+    assert "All sources failed" in capsys.readouterr().out
+
+
+def test_literature_coverage_write_report(env, capsys):
+    lit_project(capsys)
+    ingest_one(capsys)
+    capsys.readouterr()
+    assert run("literature", "coverage", "--write") == 0
+    out = capsys.readouterr().out
+    assert "Written:" in out
+    report = Path(".nora/literature/COVERAGE_REPORT.md").read_text()
+    assert report.startswith("<!-- Generated")
+    assert "Papers: 1 total" in report
+
+
+def test_literature_search_signals_ranking_uses_cache(env, capsys, monkeypatch):
+    """TOP_CANDIDATES ranks by cached citation signals: cited paper first."""
+    lit_project(capsys)
+    import json as _json
+    cache = Path(".nora/literature/cache")
+    cache.mkdir(parents=True)
+    (cache / "openalex-x.json").write_text(_json.dumps([
+        {"title": "Highly Cited Paper", "doi": None, "arxiv": None, "citations": 100},
+    ]))
+    ingest_one(capsys, title="Obscure Paper", author="A, B", year="2024")
+    ingest_one(capsys, title="Highly Cited Paper", author="C, D", year="2020")
+    assert run("literature", "render") == 0
+    top = Path(".nora/literature/TOP_CANDIDATES.md").read_text()
+    assert top.index("Highly Cited Paper") < top.index("Obscure Paper")
+    assert "citations: 100" in top
+
+
 # --- update refusal paths ----------------------------------------------------
 
 def test_update_refuses_non_git_nora_home(env, capsys, monkeypatch):
