@@ -96,66 +96,65 @@ def search_arxiv(query: str, limit: int) -> list[dict]:
     return hits
 
 
-def search_openalex(query: str, limit: int) -> list[dict]:
-    url = ("https://api.openalex.org/works?search=" + urllib.parse.quote(query)
-           + f"&per-page={limit}")
+def _openalex_work_to_hit(work: dict) -> dict:
+    loc = work.get("primary_location") or {}
+    source = loc.get("source") or {}
+    ids = work.get("ids") or {}
+    arxiv = None
+    if (loc.get("landing_page_url") or "").startswith("https://arxiv.org/abs/"):
+        arxiv = loc["landing_page_url"].rsplit("/abs/", 1)[-1]
+    return _hit(
+        title=work.get("display_name") or work.get("title"),
+        authors=[(a.get("author") or {}).get("display_name", "")
+                 for a in work.get("authorships", [])],
+        year=work.get("publication_year"),
+        venue=source.get("display_name"),
+        doi=ids.get("doi") or work.get("doi"),
+        arxiv=arxiv,
+        url=loc.get("landing_page_url"),
+        citations=_int_or_none(work.get("cited_by_count")),
+    )
+
+
+def _get_json(url: str) -> dict:
     try:
-        data = json.loads(_fetch(url))
+        return json.loads(_fetch(url))
     except json.JSONDecodeError as e:
         raise SourceError(f"unparseable JSON: {e}")
-    hits = []
-    for work in data.get("results", []):
-        loc = work.get("primary_location") or {}
-        src = loc.get("source") or {}
-        ids = work.get("ids") or {}
-        arxiv = None
-        if (loc.get("landing_page_url") or "").startswith("https://arxiv.org/abs/"):
-            arxiv = loc["landing_page_url"].rsplit("/abs/", 1)[-1]
-        hits.append(_hit(
-            title=work.get("display_name") or work.get("title"),
-            authors=[(a.get("author") or {}).get("display_name", "")
-                     for a in work.get("authorships", [])],
-            year=work.get("publication_year"),
-            venue=src.get("display_name"),
-            doi=ids.get("doi") or work.get("doi"),
-            arxiv=arxiv,
-            url=loc.get("landing_page_url"),
-            citations=_int_or_none(work.get("cited_by_count")),
-        ))
-    return hits
+
+
+def search_openalex(query: str, limit: int) -> list[dict]:
+    data = _get_json("https://api.openalex.org/works?search="
+                     + urllib.parse.quote(query) + f"&per-page={limit}")
+    return [_openalex_work_to_hit(w) for w in data.get("results", [])]
+
+
+S2_FIELDS = "title,year,venue,citationCount,externalIds,authors,url"
+
+
+def _s2_paper_to_hit(paper: dict) -> dict:
+    ext = paper.get("externalIds") or {}
+    return _hit(
+        title=paper.get("title"),
+        authors=[a.get("name", "") for a in paper.get("authors", [])],
+        year=paper.get("year"),
+        venue=paper.get("venue"),
+        doi=ext.get("DOI"),
+        arxiv=ext.get("ArXiv"),
+        url=paper.get("url"),
+        citations=_int_or_none(paper.get("citationCount")),
+    )
 
 
 def search_s2(query: str, limit: int) -> list[dict]:
-    url = ("https://api.semanticscholar.org/graph/v1/paper/search?query="
-           + urllib.parse.quote(query) + f"&limit={limit}"
-           + "&fields=title,year,venue,citationCount,externalIds,authors,url")
-    try:
-        data = json.loads(_fetch(url))
-    except json.JSONDecodeError as e:
-        raise SourceError(f"unparseable JSON: {e}")
-    hits = []
-    for paper in data.get("data", []):
-        ext = paper.get("externalIds") or {}
-        hits.append(_hit(
-            title=paper.get("title"),
-            authors=[a.get("name", "") for a in paper.get("authors", [])],
-            year=paper.get("year"),
-            venue=paper.get("venue"),
-            doi=ext.get("DOI"),
-            arxiv=ext.get("ArXiv"),
-            url=paper.get("url"),
-            citations=_int_or_none(paper.get("citationCount")),
-        ))
-    return hits
+    data = _get_json("https://api.semanticscholar.org/graph/v1/paper/search?query="
+                     + urllib.parse.quote(query) + f"&limit={limit}&fields={S2_FIELDS}")
+    return [_s2_paper_to_hit(p) for p in data.get("data", [])]
 
 
 def search_crossref(query: str, limit: int) -> list[dict]:
-    url = ("https://api.crossref.org/works?query=" + urllib.parse.quote(query)
-           + f"&rows={limit}")
-    try:
-        data = json.loads(_fetch(url))
-    except json.JSONDecodeError as e:
-        raise SourceError(f"unparseable JSON: {e}")
+    data = _get_json("https://api.crossref.org/works?query="
+                     + urllib.parse.quote(query) + f"&rows={limit}")
     hits = []
     for item in (data.get("message") or {}).get("items", []):
         titles = item.get("title") or []
@@ -180,12 +179,8 @@ def search_crossref(query: str, limit: int) -> list[dict]:
 
 
 def search_dblp(query: str, limit: int) -> list[dict]:
-    url = ("https://dblp.org/search/publ/api?q=" + urllib.parse.quote(query)
-           + f"&format=json&h={limit}")
-    try:
-        data = json.loads(_fetch(url))
-    except json.JSONDecodeError as e:
-        raise SourceError(f"unparseable JSON: {e}")
+    data = _get_json("https://dblp.org/search/publ/api?q="
+                     + urllib.parse.quote(query) + f"&format=json&h={limit}")
     hits = []
     for hit in ((data.get("result") or {}).get("hits") or {}).get("hit", []):
         info = hit.get("info") or {}
@@ -293,6 +288,110 @@ def merge_hits(per_source: list[tuple[str, list[dict]]]) -> list[dict]:
     return merged
 
 
+# --- citation-graph expansion ('nora literature expand') -----------------------
+#
+# Semantic Scholar is primary (one request per direction); OpenAlex is the
+# fallback when S2 is down or rate-limited (requires a DOI: one lookup, then
+# one batched metadata request per direction). Bounded requests, no retries —
+# same conduct rules as search.
+
+DIRECTIONS = ["refs", "cites"]  # refs: what the seed cites; cites: who cites the seed
+
+
+def _seed_s2_id(seed: dict) -> str | None:
+    if seed.get("doi"):
+        return "DOI:" + seed["doi"]
+    if seed.get("arxiv"):
+        return "arXiv:" + seed["arxiv"]
+    return None
+
+
+def expand_s2(seed: dict, direction: str, limit: int) -> list[dict]:
+    sid = _seed_s2_id(seed)
+    if sid is None:
+        raise SourceError("seed has neither DOI nor arXiv id")
+    endpoint, wrapper = (("references", "citedPaper") if direction == "refs"
+                         else ("citations", "citingPaper"))
+    data = _get_json(
+        f"https://api.semanticscholar.org/graph/v1/paper/{urllib.parse.quote(sid)}"
+        f"/{endpoint}?limit={limit}&fields={S2_FIELDS}")
+    hits = [_s2_paper_to_hit(row.get(wrapper) or {}) for row in data.get("data", [])]
+    return [h for h in hits if h["title"]]
+
+
+def expand_openalex(seed: dict, direction: str, limit: int) -> list[dict]:
+    if not seed.get("doi"):
+        raise SourceError("OpenAlex fallback needs a DOI on the seed")
+    work = _get_json("https://api.openalex.org/works/doi:"
+                     + urllib.parse.quote(seed["doi"]))
+    work_id = (work.get("id") or "").rsplit("/", 1)[-1]
+    if not work_id:
+        raise SourceError("could not resolve the seed to an OpenAlex work")
+    if direction == "refs":
+        ref_ids = [w.rsplit("/", 1)[-1] for w in work.get("referenced_works", [])][:limit]
+        if not ref_ids:
+            return []
+        data = _get_json("https://api.openalex.org/works?filter=openalex:"
+                         + "|".join(ref_ids) + f"&per-page={limit}")
+    else:
+        data = _get_json(f"https://api.openalex.org/works?filter=cites:{work_id}"
+                         + f"&per-page={limit}&sort=cited_by_count:desc")
+    return [_openalex_work_to_hit(w) for w in data.get("results", [])]
+
+
+def _expand_cache_file(cache_dir: Path, seed_id: str, direction: str, limit: int) -> Path:
+    digest = hashlib.sha1(f"{seed_id}\x00{direction}\x00{limit}".encode()).hexdigest()[:16]
+    return cache_dir / f"expand-{digest}.json"
+
+
+def expand_all(seed: dict, directions: list[str], limit: int, cache_dir: Path,
+               refresh: bool = False):
+    """Expand one seed along the given directions.
+
+    Returns (results, warnings) where results is a list of
+    {"seed", "direction", "source", "hits"} payloads (also what gets cached).
+    S2 first; OpenAlex fallback only when S2 fails for that direction.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    results, warnings = [], []
+    for direction in directions:
+        cached = _expand_cache_file(cache_dir, seed["id"], direction, limit)
+        if cached.is_file() and not refresh:
+            results.append(json.loads(cached.read_text()))
+            continue
+        payload = None
+        try:
+            payload = {"seed": seed["id"], "direction": direction,
+                       "source": "s2", "hits": expand_s2(seed, direction, limit)}
+        except SourceError as e:
+            warnings.append(f"s2 ({direction}): {e}")
+            try:
+                payload = {"seed": seed["id"], "direction": direction,
+                           "source": "openalex",
+                           "hits": expand_openalex(seed, direction, limit)}
+            except SourceError as e2:
+                warnings.append(f"openalex ({direction}): {e2}")
+        if payload is not None:
+            cached.write_text(json.dumps(payload, ensure_ascii=False, indent=1))
+            results.append(payload)
+    return results, warnings
+
+
+def cached_expansions(cache_dir: Path) -> list[dict]:
+    """All cached expand payloads (for CITATION_GRAPH_SUMMARY.md)."""
+    out = []
+    if not cache_dir.is_dir():
+        return out
+    for f in sorted(cache_dir.glob("expand-*.json")):
+        try:
+            payload = json.loads(f.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(payload, dict) and "hits" in payload:
+            out.append(payload)
+    return out
+
+
 def cached_signals(cache_dir: Path) -> dict:
     """Signal map from every cached response: normalized key -> signals.
 
@@ -305,9 +404,14 @@ def cached_signals(cache_dir: Path) -> dict:
     for f in sorted(cache_dir.glob("*.json")):
         source = f.name.split("-")[0]
         try:
-            hits = json.loads(f.read_text())
+            payload = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):
             continue
+        if isinstance(payload, dict):  # expand payload: {"source": ..., "hits": [...]}
+            hits = payload.get("hits", [])
+            source = payload.get("source", source)
+        else:
+            hits = payload
         for h in hits:
             for key in ([("doi", h["doi"])] if h.get("doi") else []) + \
                        ([("arxiv", h["arxiv"])] if h.get("arxiv") else []) + \

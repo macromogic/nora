@@ -26,7 +26,7 @@ This skill currently supports five workflows:
 
 This skill does not:
 
-- Duplicate the CLI's metadata search. `nora literature search` queries arXiv/OpenAlex/Semantic Scholar/Crossref/DBLP with caching and dedup — prefer it over hand-driving web tools for finding papers; session web tools are a supplement. Citation-graph expansion (`expand`) is a future CLI feature.
+- Duplicate the CLI's metadata search. `nora literature search` queries arXiv/OpenAlex/Semantic Scholar/Crossref/DBLP with caching and dedup, and `nora literature expand --seed <id>` walks the citation graph from a tracked paper — prefer both over hand-driving web tools for finding papers; session web tools are a supplement.
 - Judge whether a citation supports a specific claim — that's `nora-citation-auditor`'s `audit-claim-support`.
 - Write BibTeX entries or modify `.bib`/`.tex` files. `proposed_cite` means "we propose citing this"; the actual `.bib` entry is the user's (or citation-auditor-assisted) step.
 - Edit `papers.yaml` by hand — ever. All mutations go through `nora literature` commands. If a command is missing for something, say so and propose it; don't work around the CLI.

@@ -724,6 +724,69 @@ def test_literature_search_all_sources_failed(env, capsys, monkeypatch):
     assert "All sources failed" in capsys.readouterr().out
 
 
+EXPAND_HIT = {
+    "title": "Foundations of Drift", "authors": ["Ada Base"], "year": 2019,
+    "venue": "ICML", "doi": "10.1000/found.9", "arxiv": None,
+    "url": None, "citations": 200,
+}
+
+
+def _mock_expand(monkeypatch, hits, warnings=None):
+    from nora_cli import sources as src
+
+    def fake_expand_all(seed, directions, limit, cache_dir, refresh=False):
+        return ([{"seed": seed["id"], "direction": d, "source": "s2", "hits": hits}
+                 for d in directions], warnings or [])
+
+    monkeypatch.setattr(src, "expand_all", fake_expand_all)
+
+
+def seeded_paper(capsys):
+    pid = ingest_one(capsys)
+    # give the seed a DOI so expand accepts it
+    text = Path(".nora/literature/papers.yaml").read_text()
+    Path(".nora/literature/papers.yaml").write_text(
+        text.replace("doi: null", 'doi: "10.1000/probe.2"', 1))
+    return pid
+
+
+def test_literature_expand_adds_candidates_and_summary(env, capsys, monkeypatch):
+    lit_project(capsys)
+    pid = seeded_paper(capsys)
+    _mock_expand(monkeypatch, [EXPAND_HIT])
+    assert run("literature", "expand", "--seed", pid, "--direction", "refs") == 0
+    out = capsys.readouterr().out
+    assert "added: base2019foundations" in out
+    assert "Graph summary:" in out
+    text = Path(".nora/literature/papers.yaml").read_text()
+    assert 'source: "expand"' in text
+    summary = Path(".nora/literature/CITATION_GRAPH_SUMMARY.md").read_text()
+    assert summary.startswith("<!-- Generated")
+
+
+def test_literature_expand_unknown_seed(env, capsys, monkeypatch):
+    lit_project(capsys)
+    assert run("literature", "expand", "--seed", "nope2020x") == 1
+    assert "No paper with id" in capsys.readouterr().out
+
+
+def test_literature_expand_seed_without_ids_refused(env, capsys):
+    lit_project(capsys)
+    pid = ingest_one(capsys)  # no DOI, no arXiv
+    assert run("literature", "expand", "--seed", pid) == 1
+    assert "neither a DOI nor an arXiv id" in capsys.readouterr().out
+
+
+def test_literature_expand_all_directions_failed(env, capsys, monkeypatch):
+    lit_project(capsys)
+    pid = seeded_paper(capsys)
+    from nora_cli import sources as src
+    monkeypatch.setattr(src, "expand_all",
+                        lambda *a, **k: ([], ["s2 (refs): down", "openalex (refs): down"]))
+    assert run("literature", "expand", "--seed", pid, "--direction", "refs") == 1
+    assert "Expansion failed in every direction" in capsys.readouterr().out
+
+
 def test_literature_coverage_write_report(env, capsys):
     lit_project(capsys)
     ingest_one(capsys)

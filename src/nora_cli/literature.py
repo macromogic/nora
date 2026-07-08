@@ -27,6 +27,8 @@ Commands:
   nora literature init      Create .nora/literature/ with an empty papers.yaml
   nora literature search    Query external sources (--query "..."; arXiv/OpenAlex/S2/Crossref/DBLP,
                             keyless, cached permanently, --refresh to re-fetch); hits enter candidate state
+  nora literature expand    Citation-graph expansion from a tracked paper (--seed <id>,
+                            --direction refs|cites|both); hits enter candidate state
   nora literature ingest    Add candidate papers (--bibtex FILE | --titles FILE | --title ... manual entry)
   nora literature dedup     Report likely duplicates in papers.yaml (never merges automatically)
   nora literature queue     List papers in the reading queue (status queued/reading)
@@ -297,6 +299,98 @@ def cmd_search(base: Path, args) -> int:
     return 0
 
 
+def write_graph_summary(base: Path, papers: list[dict]) -> Path:
+    """Generated view over cached expansions: per-seed neighbor counts and
+    papers reached from more than one seed (a strong mechanical signal)."""
+    expansions = sorted(src.cached_expansions(_cache_dir(base)),
+                        key=lambda p: (p["seed"], p["direction"]))
+    by_id = {p["id"]: p for p in papers}
+
+    def hit_key(h: dict):
+        if h.get("doi"):
+            return ("doi", ps.normalize_doi(h["doi"]))
+        if h.get("arxiv"):
+            return ("arxiv", h["arxiv"])
+        return ("title", ps.normalize_title(h.get("title", "")))
+
+    lines = [GENERATED_HEADER, "", "# Citation Graph Summary", ""]
+    if not expansions:
+        lines += ["(no expansions cached yet — run 'nora literature expand --seed <id>')", ""]
+    reach: dict = {}
+    last_seed = None
+    for payload in expansions:
+        seed = payload["seed"]
+        seed_title = by_id[seed]["title"] if seed in by_id else "(no longer tracked)"
+        label = "references" if payload["direction"] == "refs" else "citing papers"
+        for h in payload["hits"]:
+            entry = reach.setdefault(hit_key(h), {"title": h.get("title", ""), "seeds": set()})
+            entry["seeds"].add(seed)
+        if seed != last_seed:
+            lines.append(f"- **{seed}** — {seed_title}")
+            last_seed = seed
+        lines.append(f"  - {len(payload['hits'])} {label} via {payload['source']}")
+    overlaps = sorted(
+        (e for e in reach.values() if len(e["seeds"]) > 1),
+        key=lambda e: -len(e["seeds"]))
+    if overlaps:
+        lines += ["", "## Reached from multiple seeds", ""]
+        for e in overlaps:
+            lines.append(f"- {e['title']} — via {', '.join(sorted(e['seeds']))}")
+    lines.append("")
+    path = _lit_dir(base) / "CITATION_GRAPH_SUMMARY.md"
+    path.write_text("\n".join(lines))
+    return path
+
+
+def cmd_expand(base: Path, args) -> int:
+    try:
+        papers = ps.load(base)
+    except ps.PapersError as e:
+        print(f"ERROR: {e}")
+        return 1
+    seed = next((p for p in papers if p["id"] == args.seed), None)
+    if seed is None:
+        print(f"No paper with id: {args.seed}")
+        return 1
+    if not seed["doi"] and not seed["arxiv"]:
+        print(f"Cannot expand {args.seed}: it has neither a DOI nor an arXiv id.")
+        print("Add metadata first (e.g. find it via 'nora literature search' and dedup),")
+        print("or expand a different seed.")
+        return 1
+
+    directions = src.DIRECTIONS if args.direction == "both" else [args.direction]
+    results, warnings = src.expand_all(seed, directions, args.limit,
+                                       _cache_dir(base), refresh=args.refresh)
+    for w in warnings:
+        print(f"WARNING: {w}")
+    if not results:
+        print("Expansion failed in every direction; nothing to ingest.")
+        return 1
+
+    added, skipped = [], []
+    for payload in results:
+        for hit in payload["hits"]:
+            existing = _match_existing(papers, hit)
+            if existing:
+                skipped.append((hit["title"], existing["id"]))
+            else:
+                added.append(_add_paper(papers, hit, "expand"))
+
+    if added:
+        ps.save(base, papers)
+    top = write_top_candidates(base, papers)
+    summary = write_graph_summary(base, papers)
+    for paper in added:
+        print(f"added: {paper['id']}  {paper['title']} [candidate]")
+    if skipped:
+        print(f"({len(skipped)} hits already tracked)")
+    done = ", ".join(f"{p['direction']} via {p['source']}" for p in results)
+    print(f"{len(added)} added from {args.seed} ({done}). Total papers: {len(papers)}.")
+    print(f"Ranked view: {top}")
+    print(f"Graph summary: {summary}")
+    return 0
+
+
 def cmd_dedup(base: Path) -> int:
     try:
         papers = ps.load(base)
@@ -508,11 +602,13 @@ def cmd_render(base: Path) -> int:
         map_lines.append("")
     (lit / "RELATED_WORK_MAP.md").write_text("\n".join(map_lines))
     top = write_top_candidates(base, papers)
+    summary = write_graph_summary(base, papers)
 
     print("Rendered from papers.yaml:")
     print(f"  {lit / 'READING_QUEUE.md'}")
     print(f"  {lit / 'RELATED_WORK_MAP.md'}")
     print(f"  {top}")
+    print(f"  {summary}")
     return 0
 
 
@@ -599,6 +695,14 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--refresh", action="store_true",
                         help="bypass the permanent response cache")
 
+    expand = sub.add_parser("expand", help="citation-graph expansion from a tracked seed paper")
+    expand.add_argument("--seed", required=True, metavar="ID")
+    expand.add_argument("--direction", choices=["refs", "cites", "both"], default="both",
+                        help="refs: what the seed cites; cites: who cites the seed")
+    expand.add_argument("--limit", type=int, default=10, help="per direction")
+    expand.add_argument("--refresh", action="store_true",
+                        help="bypass the permanent response cache")
+
     ingest = sub.add_parser("ingest", help="add candidate papers")
     ingest.add_argument("--bibtex", metavar="FILE")
     ingest.add_argument("--titles", metavar="FILE")
@@ -648,6 +752,8 @@ def cmd_literature(argv: list[str]) -> int:
         return cmd_init(base)
     if args.subcmd == "search":
         return cmd_search(base, args)
+    if args.subcmd == "expand":
+        return cmd_expand(base, args)
     if args.subcmd == "ingest":
         return cmd_ingest(base, args)
     if args.subcmd == "dedup":

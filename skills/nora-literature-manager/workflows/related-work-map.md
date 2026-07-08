@@ -15,7 +15,7 @@ Run `nora literature coverage`: role × status counts, unassigned papers, and ga
 ### 2. Interpret
 
 - **Unassigned papers**: triage debt — assign roles via the `triage` workflow (`mark --role`).
-- **Gap roles**: judge which gaps actually matter for this project (a tool paper may never need a `threat_model` entry; a security paper without one is a real hole). Say which gaps you'd fill and why; filling them is a `search` follow-up.
+- **Gap roles**: judge which gaps actually matter for this project (a tool paper may never need a `threat_model` entry; a security paper without one is a real hole). Say which gaps you'd fill and why; filling them is a `search` follow-up — or `nora literature expand --seed <id>` from the strongest paper in a neighboring role (check `CITATION_GRAPH_SUMMARY.md` for papers reached from multiple seeds; those are strong mechanical signals).
 - **Role imbalances**: e.g. many `background`, zero `competing_system` before a paper submission is a warning sign worth surfacing.
 
 ### 3. Regenerate the view

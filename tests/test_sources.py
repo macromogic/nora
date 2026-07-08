@@ -166,6 +166,82 @@ def test_merge_hits_across_sources():
     assert first["authors"] == ["Erin Chen"]           # empty filled from later source
 
 
+S2_REFS_JSON = json.dumps({"data": [
+    {"citedPaper": {"title": "Foundations of Drift", "year": 2019, "venue": "ICML",
+                    "citationCount": 200, "externalIds": {"DOI": "10.1000/found.9"},
+                    "authors": [{"name": "Ada Base"}], "url": None}},
+]})
+
+S2_CITES_JSON = json.dumps({"data": [
+    {"citingPaper": {"title": "Follow-up on Drift", "year": 2024, "venue": None,
+                     "citationCount": 2, "externalIds": {"ArXiv": "2401.00001"},
+                     "authors": [], "url": None}},
+]})
+
+OPENALEX_WORK_JSON = json.dumps({
+    "id": "https://openalex.org/W42",
+    "referenced_works": ["https://openalex.org/W1", "https://openalex.org/W2"],
+})
+
+SEED = {"id": "chen2023drift", "doi": "10.1000/drift.1", "arxiv": None}
+
+
+def test_expand_s2_both_directions(monkeypatch):
+    def fake_fetch(url):
+        assert "DOI%3A10.1000/drift.1" in url or "DOI:10.1000/drift.1" in urllib_unquote(url)
+        return (S2_REFS_JSON if "/references" in url else S2_CITES_JSON).encode()
+
+    def urllib_unquote(u):
+        import urllib.parse
+        return urllib.parse.unquote(u)
+
+    monkeypatch.setattr(src, "_fetch", fake_fetch)
+    refs = src.expand_s2(SEED, "refs", 5)
+    assert refs[0]["doi"] == "10.1000/found.9" and refs[0]["citations"] == 200
+    cites = src.expand_s2(SEED, "cites", 5)
+    assert cites[0]["arxiv"] == "2401.00001"
+
+
+def test_expand_s2_needs_an_id():
+    with pytest.raises(src.SourceError, match="neither DOI nor arXiv"):
+        src.expand_s2({"id": "x", "doi": None, "arxiv": None}, "refs", 5)
+
+
+def test_expand_openalex_refs_batches_ids(monkeypatch):
+    calls = []
+
+    def fake_fetch(url):
+        calls.append(url)
+        if "/works/doi:" in url:
+            return OPENALEX_WORK_JSON.encode()
+        assert "filter=openalex:W1|W2" in url
+        return OPENALEX_JSON.encode()
+
+    monkeypatch.setattr(src, "_fetch", fake_fetch)
+    hits = src.expand_openalex(SEED, "refs", 5)
+    assert len(calls) == 2  # lookup + one batched metadata request
+    assert hits[0]["doi"] == "10.1000/drift.1"
+
+
+def test_expand_all_falls_back_to_openalex_and_caches(monkeypatch, tmp_path):
+    def fake_fetch(url):
+        if "semanticscholar" in url:
+            raise src.SourceError("HTTP Error 429")
+        if "/works/doi:" in url:
+            return OPENALEX_WORK_JSON.encode()
+        return OPENALEX_JSON.encode()
+
+    monkeypatch.setattr(src, "_fetch", fake_fetch)
+    results, warnings = src.expand_all(SEED, ["refs"], 5, tmp_path)
+    assert results[0]["source"] == "openalex"
+    assert any(w.startswith("s2 (refs): HTTP Error 429") for w in warnings)
+    # cached: a second run makes no requests even with everything failing
+    monkeypatch.setattr(src, "_fetch", lambda url: (_ for _ in ()).throw(src.SourceError("offline")))
+    results2, warnings2 = src.expand_all(SEED, ["refs"], 5, tmp_path)
+    assert results2 == results and warnings2 == []
+    assert src.cached_expansions(tmp_path)[0]["seed"] == "chen2023drift"
+
+
 def test_cached_signals(tmp_path):
     (tmp_path / "openalex-abc.json").write_text(json.dumps([
         {"title": "Some Paper", "doi": "10.1/x", "arxiv": None, "citations": 10},
