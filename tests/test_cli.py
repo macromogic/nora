@@ -368,13 +368,18 @@ def test_module_doctor_incomplete_exits_1(env, capsys, mod):
     assert "initialized but incomplete" in out
 
 
-@pytest.mark.parametrize("mod", MODULE_FILES)
-def test_module_help_on_unknown_subcommand(env, capsys, mod):
-    assert run(mod) == 0
+def test_writing_help_on_unknown_subcommand(env, capsys):
+    assert run("writing") == 0
     help_out = capsys.readouterr().out
-    assert f"nora {mod} init" in help_out
-    assert run(mod, "bogus") == 0
+    assert "nora writing init" in help_out
+    assert run("writing", "bogus") == 0
     assert capsys.readouterr().out == help_out
+
+
+def test_citation_help_and_argparse_usage_error(env, capsys):
+    assert run("citation") == 0
+    assert "nora citation lint" in capsys.readouterr().out
+    assert run("citation", "bogus") == 2  # argparse usage error
 
 
 def test_module_init_from_subdir_targets_workspace_root(env, capsys):
@@ -389,9 +394,14 @@ def test_module_init_from_subdir_targets_workspace_root(env, capsys):
     assert not Path(".nora").exists()
 
 
-def test_citation_check_is_agent_driven_notice(env, capsys):
+def test_citation_check_is_lint_alias(env, capsys):
+    run("new")
+    Path("refs.bib").write_text("@article{a2020x, title={T}, author={A, B}, year={2020}, journal={J}}\n")
+    Path("p.tex").write_text("\\cite{a2020x}\n")
+    capsys.readouterr()
     assert run("citation", "check") == 0
-    assert "agent-driven" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "finding(s)" in out  # lint ran, not the old notice
 
 
 def test_lit_alias_routes_to_literature(env, capsys):
@@ -814,6 +824,152 @@ def test_literature_search_signals_ranking_uses_cache(env, capsys, monkeypatch):
     top = Path(".nora/literature/TOP_CANDIDATES.md").read_text()
     assert top.index("Highly Cited Paper") < top.index("Obscure Paper")
     assert "citations: 100" in top
+
+
+# --- citation backend (lint/normalize/fix/keygen, Stage 6+7) -------------------
+
+SEEDED_BIB = """\
+@article{smith2021deep,
+  title   = {Deep Sequence Models},
+  author  = {Alice Smith and Jones, Bob},
+  year    = {2021},
+  journal = {JAIR},
+  doi     = {https://doi-org.proxy.lib.univ.edu/10.1000/xyz.123},
+  pages   = {100-115}
+}
+
+@article{smith2021deep,
+  title = {Deep Sequence Models (Extended)},
+  author = {Smith, Alice},
+  year = {2021},
+  journal = {JAIR}
+}
+
+@article{wang_scaling,
+  title  = {Scaling Effects on Context Retention},
+  author = {Wang, Dan},
+  year   = {2023}
+}
+
+@misc{rfc9110,
+  title = {HTTP Semantics},
+  year = {2022}
+}
+
+@article{unused2019entry,
+  title   = {A Survey of Conversational Memory},
+  author  = {Ueda, Hana},
+  year    = {2019},
+  journal = {ACM Computing Surveys},
+  doi     = {10.1000/xyz.123}
+}
+"""
+
+SEEDED_TEX = r"""\documentclass{article}
+\begin{document}
+Prior work demonstrates that models forget instructions.
+Sequence models are well studied~\cite{smith2021deep}.
+Scale matters~\cite{wang_scaling,ghost2024missing}.
+A big cluster~\cite{a,b,c,d,e,f}.
+An empty one~\cite{}.
+Our method outperforms all baselines~\cite{smith2021deep}.
+\end{document}
+"""
+
+
+def citation_project(capsys):
+    run("new")
+    Path("refs.bib").write_text(SEEDED_BIB)
+    Path("paper.tex").write_text(SEEDED_TEX)
+    capsys.readouterr()
+
+
+def test_citation_lint_finds_all_seeded_defects(env, capsys):
+    citation_project(capsys)
+    assert run("citation", "lint") == 0
+    out = capsys.readouterr().out
+    assert "AUTO_SAFE [duplicate_key] key 'smith2021deep' defined 2 times" in out
+    assert "REVIEW_REQUIRED [duplicate_doi] DOI 10.1000/xyz.123 appears on: smith2021deep, unused2019entry" in out
+    assert "DO_NOT_APPLY [missing_fields] wang_scaling (@article): missing journal" in out
+    assert "BLOCKED [undefined_key] 'ghost2024missing' cited at" in out
+    assert "REVIEW_REQUIRED [unused_entry] 'unused2019entry' defined but never cited" in out
+    assert "6 keys in one citation" in out
+    assert "AUTO_SAFE [malformed_cite] empty citation command" in out
+    assert 'heuristic: possible uncited claim' in out          # "demonstrates" sentence
+    assert "outperforms" not in out.split("uncited_claim")[0]  # cited claim not flagged
+    assert "SAFE_FIX [normalize]" in out
+    assert "Nothing was modified" in out
+
+
+def test_citation_lint_respects_nocite_star(env, capsys):
+    citation_project(capsys)
+    Path("paper.tex").write_text("\\nocite{*}\n\\cite{smith2021deep}\n")
+    assert run("citation", "lint") == 0
+    out = capsys.readouterr().out
+    assert "unused-entry check skipped" in out
+    assert "never cited" not in out
+
+
+def test_citation_normalize_readonly_diff(env, capsys):
+    citation_project(capsys)
+    before = Path("refs.bib").read_text()
+    assert run("citation", "normalize") == 0
+    out = capsys.readouterr().out
+    assert "read-only preview" in out
+    assert "+  doi     = {https://doi.org/10.1000/xyz.123}" in out
+    assert "+  pages   = {100--115}" in out
+    assert Path("refs.bib").read_text() == before  # untouched
+
+
+def test_citation_fix_dry_run_then_apply_with_backup(env, capsys):
+    citation_project(capsys)
+    before = Path("refs.bib").read_text()
+    assert run("citation", "fix") == 0
+    assert "Dry run" in capsys.readouterr().out
+    assert Path("refs.bib").read_text() == before
+
+    assert run("citation", "fix", "--apply") == 0
+    out = capsys.readouterr().out
+    assert "backup:" in out
+    after = Path("refs.bib").read_text()
+    assert "https://doi.org/10.1000/xyz.123" in after
+    assert "100--115" in after
+    assert "Smith, Alice and Jones, Bob" in after  # 'Alice Smith' reformatted
+    backups = list(Path(".nora/citation/backups").iterdir())
+    assert len(backups) == 1 and backups[0].read_text() == before
+
+
+def test_citation_fix_never_touches_tex(env, capsys):
+    citation_project(capsys)
+    before = Path("paper.tex").read_text()
+    run("citation", "fix", "--apply")
+    assert Path("paper.tex").read_text() == before
+
+
+def test_citation_keygen_proposals_only(env, capsys):
+    citation_project(capsys)
+    before = Path("refs.bib").read_text()
+    assert run("citation", "keygen") == 0
+    out = capsys.readouterr().out
+    assert "wang_scaling -> wang2023scaling" in out
+    assert "rfc9110" not in out          # @misc without author: stable product key allowed
+    assert "NEVER applied automatically" in out
+    assert Path("refs.bib").read_text() == before
+
+
+def test_citation_lint_write_report(env, capsys):
+    citation_project(capsys)
+    assert run("citation", "lint", "--write") == 0
+    report = Path(".nora/citation/LINT_REPORT.md").read_text()
+    assert report.startswith("<!-- Generated")
+    assert "duplicate_key" in report
+
+
+def test_citation_lint_no_sources_found(env, capsys):
+    run("new")
+    capsys.readouterr()
+    assert run("citation", "lint") == 1
+    assert "No .bib or .tex files found" in capsys.readouterr().out
 
 
 # --- update refusal paths ----------------------------------------------------

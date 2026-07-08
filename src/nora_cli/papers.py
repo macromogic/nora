@@ -208,7 +208,9 @@ def normalize_title(title: str) -> str:
 
 def normalize_doi(doi: str) -> str:
     doi = doi.strip().lower()
-    for prefix in ("https://doi.org/", "http://doi.org/", "doi.org/", "doi:"):
+    # any DOI-ish host counts: doi.org, dx.doi.org, library proxies like doi-org.proxy.*
+    doi = re.sub(r"^https?://[^/]*doi[^/]*/", "", doi)
+    for prefix in ("doi.org/", "doi:"):
         if doi.startswith(prefix):
             doi = doi[len(prefix):]
     return doi

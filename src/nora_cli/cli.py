@@ -76,36 +76,11 @@ Core commands:
   nora update          Pull the latest nora CLI and skills from git
 
 Optional module commands (each module is off until explicitly enabled):
-  nora citation init|check|doctor    Citation/BibTeX audit module (run 'nora citation help')
+  nora citation <subcommand>         Citation hygiene backend: lint/normalize/fix/keygen over .bib/.tex (run 'nora citation help')
   nora literature <subcommand>       Literature backend: papers.yaml state, ingest/dedup/queue/mark/coverage/render (run 'nora literature help')
   nora writing init|doctor           Writing assistant module (run 'nora writing help')"""
 
-CITATION_CHECK_TEXT = """\
-'nora citation check' is agent-driven, not a standalone script.
-
-In your agent session, run the nora-citation-auditor skill:
-  /nora-citation-auditor check-bibtex
-  /nora-citation-auditor check-latex-citations
-  /nora-citation-auditor report
-  /nora-citation-auditor audit-claim-support
-
-Or, if installed, the short alias:
-  /nora-citation check-bibtex"""
-
 MODULE_HELP = {
-    "citation": """\
-Nora citation auditor
-
-Commands:
-  nora citation init    Create .nora/citation/ skeleton in the current project
-  nora citation check   Show how to run the citation audit (agent-driven, via the nora-citation-auditor skill)
-  nora citation doctor  Check whether citation module files exist (fails if .nora/citation/ is missing)
-
-This module is primarily skill-driven. In your agent session, run:
-  /nora-citation-auditor check-bibtex
-  /nora-citation-auditor check-latex-citations
-  /nora-citation-auditor report
-  /nora-citation-auditor audit-claim-support""",
     "writing": """\
 Nora writing assistant
 
@@ -477,24 +452,17 @@ def _module_init(name: str) -> int:
         print(f"{mod['state_name']} state already exists: .nora/{name}/")
         return 0
 
-    if name == "citation":
-        mod_dir.mkdir(parents=True)
-        src = home / "skills" / "nora-citation-auditor" / "templates" / "citation"
-        for item in src.iterdir():
-            shutil.copy(item, mod_dir / item.name)
-    else:  # writing
-        mod_dir.mkdir(parents=True)
-        src = home / "skills" / "nora-writing-assistant" / "templates" / "writing"
-        for item in src.iterdir():
-            shutil.copy(item, mod_dir / item.name)
+    # citation/literature live in their own modules; only writing remains here
+    mod_dir.mkdir(parents=True)
+    src = home / "skills" / "nora-writing-assistant" / "templates" / "writing"
+    for item in src.iterdir():
+        shutil.copy(item, mod_dir / item.name)
 
     if not (base / ".nora" / "PROJECT_STATE.yaml").is_file():
         print("Note: no full Nora project state found (.nora/PROJECT_STATE.yaml missing).")
-        print(f"Initialized {name}-audit-only (standalone) state in:" if name == "citation"
-              else f"Initialized {name}-only (standalone) state in:")
+        print(f"Initialized {name}-only (standalone) state in:")
     else:
-        print(f"Initialized {name} audit state in:" if name == "citation"
-              else f"Initialized {name} state in:")
+        print(f"Initialized {name} state in:")
     print(f"  {mod_dir}")
     return 0
 
@@ -537,9 +505,6 @@ def cmd_module(name: str, subcmd: str) -> int:
         return _module_init(name)
     if subcmd == "doctor":
         return _module_doctor(name)
-    if name == "citation" and subcmd == "check":
-        print(CITATION_CHECK_TEXT)
-        return 0
     print(MODULE_HELP[name])
     return 0
 
@@ -563,7 +528,10 @@ def main(argv: list[str] | None = None) -> int:
     if cmd in ("literature", "lit"):
         from . import literature as lit_mod
         return lit_mod.cmd_literature(args[1:])
-    if cmd in ("citation", "writing"):
+    if cmd == "citation":
+        from . import citation as cit_mod
+        return cit_mod.cmd_citation(args[1:])
+    if cmd == "writing":
         subcmd = args[1] if len(args) > 1 else "help"
         return cmd_module(cmd, subcmd)
 

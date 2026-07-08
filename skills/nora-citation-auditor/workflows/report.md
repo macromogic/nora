@@ -13,7 +13,7 @@ Produce, as a proposal (never a silent write):
 
 ### 1. Gather findings
 
-If `check-bibtex` and/or `check-latex-citations` already ran earlier in this session, reuse their findings. Otherwise, run whichever of them is needed first (ask the user if it's unclear whether both are in scope).
+If `check-bibtex` and/or `check-latex-citations` already ran earlier in this session, reuse their findings. Otherwise, run whichever of them is needed first (ask the user if it's unclear whether both are in scope). `nora citation lint --write` leaves a `LINT_REPORT.md` snapshot in `.nora/citation/` — reuse it when fresh instead of re-running.
 
 ### 2. Read existing output
 

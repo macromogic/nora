@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-07-08
+
+Alpha. The citation module now follows the same shape as literature:
+deterministic checks in the CLI, judgment in the skill.
+
+### Added
+
+- `nora citation lint` (alias: `check`) — all mechanical citation checks, scripted (migrated from the agent prompt): duplicate keys, duplicate DOIs (proxy hosts normalized before comparison), missing required fields per entry type, keys cited but undefined, entries defined but never cited (`\nocite{*}` detected and honored), malformed cite commands, cite clusters over 5 keys, and an explicitly-labeled **heuristic** scan for technical-claim sentences with no citation (fixed verb list; findings are leads, not verdicts). Read-only; `--write` saves `.nora/citation/LINT_REPORT.md`.
+- `nora citation normalize` — read-only preview of hygiene normalization: proxy DOI hosts (`doi-org.proxy.*` etc.) → `https://doi.org/`, page ranges `-` → `--`, unambiguous `First Last` author names → `Lastname, Firstname`
+- `nora citation fix` — applies those SAFE_FIX normalizations as targeted string substitutions (entries are never reordered or reformatted wholesale). Dry-run by default; `--apply` writes after backing the original up to `.nora/citation/backups/<timestamp>-<name>`. Never touches `.tex`.
+- `nora citation keygen` — proposes convention-conforming keys (lowercase first-author surname + year + first substantive title word, same shape as papers.yaml local ids); product/spec-style entries (`@misc`/`@manual`/… without authors) may keep stable product keys. Report-only: key renames touch `.tex`, which the CLI never edits.
+- DOI normalization now strips any DOI-ish host (doi.org, dx.doi.org, library proxies) — also improves `nora literature` dedup
+- Test suite grew from 105 to 113: all lint checks against seeded defects, `\nocite{*}` path, normalize/fix dry-run/apply/backup, keygen skip rules, `.tex` untouchability
+
+### Changed
+
+- `nora citation check` no longer prints an "agent-driven" notice — it runs `lint`
+- `nora-citation-auditor` skill workflows rewritten around the CLI: `check-bibtex`/`check-latex-citations` run `nora citation lint` first and keep for the agent only what scripts can't judge (fuzzy duplicate titles, arXiv/journal pairs, false-positive filtering, review-queue curation); `report` reuses `LINT_REPORT.md` when fresh
+- Citation subcommands are parsed with argparse (like `nora literature`); unknown subcommands exit 2 with usage
+
 ## [0.5.0] - 2026-07-07
 
 Alpha. First release that talks to external services: `nora literature
