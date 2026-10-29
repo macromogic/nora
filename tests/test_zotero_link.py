@@ -269,3 +269,40 @@ def test_atomic_save_failure_preserves_old_project(project, monkeypatch):
     assert ps.papers_path(project).read_bytes() == before
     assert not (project / ".nora/literature/.papers.write.lock").exists()
     assert not list((project / ".nora/literature").glob(".papers-*"))
+
+
+def test_ignore_blocks_explicit_import_and_skips_sync_without_deleting(project):
+    from nora_cli import zotero_scope as scope
+    command = ['lit', 'zotero', 'import', '--item', 'PAPER001', '--apply']
+    assert main(command) == 0
+    before = ps.papers_path(project).read_bytes()
+    scope.change(z.load_config(), 'add', 'COLLECT1')
+    assert main(command) == 1
+    assert main(['lit', 'zotero', 'import', '--collection', 'COLLECT1', '--apply']) == 1
+    assert main(['lit', 'zotero', 'sync', '--apply']) == 0
+    assert ps.papers_path(project).read_bytes() == before
+
+
+def test_recursive_import_skips_ignored_child(project, monkeypatch):
+    from nora_cli import zotero_scope as scope
+    snap = snapshot([remote(), remote('PAPER002', collections=['COLLECT2'], DOI='10.1000/other', title='Other')])
+    monkeypatch.setattr(z.Client, 'snapshot', lambda self: snap)
+    scope.change(z.load_config(), 'add', 'COLLECT2')
+    assert main(['lit', 'zotero', 'import', '--collection', 'COLLECT1', '--recursive', '--apply']) == 0
+    assert [ps.zotero_link(p)['key'] for p in ps.load(project)] == ['PAPER001']
+
+
+def test_known_stale_offline_import_does_not_write(project):
+    from nora_cli.zotero_audit import save_audit
+    config = z.Config('123', data_dir=project / 'shared-state')
+    save_audit(config, snapshot(), [])
+    directory = config.state_dir / 'collection_operations'
+    directory.mkdir()
+    (directory / 'write.json').write_text(json.dumps(dict(
+        library=config.identity, status='verified', verified_library_version=21)))
+    path = project / '.nora/literature/papers.yaml'
+    before = path.read_bytes()
+    argv = ['lit', 'zotero', 'import', '--item', 'PAPER001', '--data-dir', str(config.data_dir), '--offline']
+    assert main(argv) == 0
+    assert main(argv + ['--apply']) == 1
+    assert path.read_bytes() == before

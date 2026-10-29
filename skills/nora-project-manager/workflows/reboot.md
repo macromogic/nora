@@ -2,6 +2,8 @@
 
 Use this workflow when the user wants to restart a stale or long-inactive research project.
 
+Lead with the project name and current task, rather than the word “reboot”. If the host offers a session-title tool, use a project/task title without the recovery action; otherwise do not claim to have renamed the session.
+
 ## Goal
 
 Recover the project from an unclear state into a usable state with:

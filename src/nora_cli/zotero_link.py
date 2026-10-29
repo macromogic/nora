@@ -167,6 +167,9 @@ def plan(papers: list, snapshot: dict, args) -> tuple[list, list, list]:
         pairs = []
         for paper in selected:
             key = ps.zotero_link(paper)["key"]
+            if key in snapshot.get("_excluded_items", []):
+                messages.append(f"skipped: {paper['id']} (ignored collection; local record retained)")
+                continue
             if key not in remote:
                 blocked.append(f"{paper['id']}: Zotero item {key} is absent; local paper retained (possibly deleted/merged remotely)")
             else:
@@ -251,6 +254,14 @@ def run(base: Path, args) -> int:
         snapshot = read_state(config)["snapshot"] if args.offline else z.Client(config).snapshot()
         if snapshot is None:
             raise z.ZoteroError("No saved Zotero snapshot. Run nora zotero audit --write first, or omit --offline.")
+        if args.offline:
+            from .zotero_freshness import check
+            check(config, snapshot, applying=args.apply)
+        from .zotero_scope import scope
+        snapshot = scope(snapshot, config)
+        if args.zotero_command == "import":
+            if args.collection in snapshot["_excluded_collections"] or set(args.item or []).intersection(snapshot["_excluded_items"]):
+                raise z.ZoteroError("Explicit selection is excluded by the collection ignore policy or is in trash. Review its status before importing.")
         updated, messages, blocked = plan(papers, snapshot, args)
         print(f"Zotero {config.identity}; library version {snapshot['version']}; snapshot {snapshot['fetched_at']}")
         if args.offline:

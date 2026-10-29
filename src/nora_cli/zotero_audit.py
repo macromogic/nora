@@ -101,6 +101,8 @@ def _local_attachment(data: dict, key: str, config: Config) -> str:
 def analyze(snapshot: dict, config: Config) -> dict:
     if snapshot.get("library") != config.identity:
         raise ZoteroError("Snapshot belongs to a different library.")
+    from .zotero_scope import scope
+    snapshot = scope(snapshot, config)
     items = snapshot["items"]
     bibliographic = [i for i in items if i["data"].get("itemType") not in {"attachment", "note", "annotation"}]
     attachments = [i for i in items if i["data"].get("itemType") == "attachment"]
@@ -194,7 +196,9 @@ def analyze(snapshot: dict, config: Config) -> dict:
     for warning in path_warnings:
         issues.append(_issue(config.identity, "collection_structure", [warning["key"]],
                              "Collection hierarchy could not be fully resolved.", warning))
-    return {"issues": sorted(issues, key=lambda i: i["issue_key"]), "bibliographic_items": len(bibliographic),
+    return {"excluded_items": len(snapshot["_excluded_items"]),
+            "excluded_collections": len(snapshot["_excluded_collections"]),
+            "issues": sorted(issues, key=lambda i: i["issue_key"]), "bibliographic_items": len(bibliographic),
             "attachments": len(attachment_keys), "pdf_attachments": sum(availability.values()),
             "collections": [{"key": k, "path": paths[k], "items": collections[k]} for k in sorted(paths)],
             "tags": dict(tags), "tag_assignments": dict(tag_types), "item_types": dict(kinds),
@@ -237,7 +241,10 @@ def read_state(config: Config) -> dict:
         validate_objects(snapshot["collections"], "collections")
         seen = set()
         for issue in state["issues"]:
-            if (not isinstance(issue["issue_key"], str) or not issue["issue_key"].startswith(config.identity + ":")
+            if (not isinstance(issue, dict)
+                    or not isinstance(issue.get("item_keys"), list)
+                    or not all(isinstance(k, str) for k in issue["item_keys"])
+                    or not isinstance(issue["issue_key"], str) or not issue["issue_key"].startswith(config.identity + ":")
                     or issue["issue_key"] in seen or issue["disposition"] not in {"open", "ignored", "resolved"}
                     or not isinstance(issue["detected"], bool) or not isinstance(issue["evidence"], dict)
                     or not all(isinstance(issue[k], str) for k in ("fingerprint", "summary", "kind", "first_seen", "last_seen"))):
@@ -287,7 +294,10 @@ def save_audit(config: Config, snapshot: dict, findings: list) -> list:
         old_snapshot = current["snapshot"]
         if old_snapshot and old_snapshot["version"] > snapshot["version"]:
             raise ZoteroError("A newer snapshot was saved concurrently; retry. Existing state preserved.")
-        issues = reconcile(current["issues"], findings, snapshot["fetched_at"])
+        from .zotero_scope import scope, visible_issues
+        visible = {i["issue_key"] for i in visible_issues(current["issues"], scope(snapshot, config))}
+        retained = [i for i in current["issues"] if i["issue_key"] not in visible]
+        issues = reconcile([i for i in current["issues"] if i["issue_key"] in visible], findings, snapshot["fetched_at"]) + retained
         _save(config, {"schema_version": 1, "library": config.identity, "snapshot": snapshot, "issues": issues})
     return issues
 
@@ -300,7 +310,8 @@ def mark(config: Config, key: str, status: str, note: str):
         raise ZoteroError("No saved audit; run audit --write first.")
     with _locked(config):
         state = read_state(config)
-        for issue in state["issues"]:
+        from .zotero_scope import scope, visible_issues
+        for issue in visible_issues(state["issues"], scope(state["snapshot"], config)):
             if issue["issue_key"] == key:
                 issue.update(disposition=status, review_note=note, reviewed_at=now(),
                              reviewed_fingerprint=issue["fingerprint"], evidence_changed=False)
@@ -325,7 +336,8 @@ def render(snapshot: dict, result: dict, issues: list, limit=20, offline=False) 
              "Local PDF availability is checked on this machine at report time; remote file availability is not verified.", "",
              f"Bibliographic items: {result['bibliographic_items']}; attachments: {result['attachments']}; "
              f"PDF attachments: {result['pdf_attachments']}; collections: {len(result['collections'])}; tags: {len(result['tags'])}.",
-             "All untrashed items, including unfiled and _inbox items, are included. Notes/annotations are excluded from saved content.",
+             f"Excluded by collection policy: {result.get('excluded_collections', 0)} collection keys; {result.get('excluded_items', 0)} items (including children).",
+             "Counts and findings exclude ignored collections and their members. The full metadata snapshot is retained for sync validation; notes/annotations are not saved.",
              "Findings are review candidates, not instructions to merge, retag, or change research status.", ""]
     for title, counts in [("Item types", result["item_types"]), ("Metadata coverage (absence can be legitimate)", result["completeness"]),
                           ("Tag assignments", result["tag_assignments"]), ("Attachment modes", result["attachment_modes"]),

@@ -117,13 +117,15 @@ def test_pagination_full_snapshot_includes_children_and_keeps_versions(config, m
         start = int(urllib.parse.parse_qs(parsed.query)["start"][0])
         if parsed.path.endswith("collections"):
             return snapshot(config)["collections"], headers(total=1)
-        pages = {0: [item()], 1: [attachment()], 2: [{"key": "NOTE0001", "version": 3,
+        assert urllib.parse.parse_qs(parsed.query)["includeTrashed"] == ["1"]
+        pages = {0: [item(deleted=1)], 1: [attachment()], 2: [{"key": "NOTE0001", "version": 3,
                                                    "data": {"itemType": "note", "note": "private note"}}]}
         return pages[start], headers(total=3)
     monkeypatch.setattr(z, "_get", get)
     result = z.Client(config).snapshot()
     assert len(calls) == 4 and result["version"] == 3
     assert result["total_api_items"] == 3 and len(result["items"]) == 2
+    assert result["items"][0]["data"]["deleted"] == 1
     assert "private note" not in json.dumps(result)
 
 
@@ -331,3 +333,112 @@ def test_render_controls_and_bounded_output(config):
     report = a.render(snap, result, issues, limit=1)
     assert "\x1b" not in report and "<tag>" not in report
     assert "more; use --limit 0" in report
+
+
+def test_collection_ignore_recursive_shared_items_attachments_and_recovery(config):
+    from nora_cli import zotero_scope as scope
+    cols = [dict(key='COLLECT1', version=3, data=dict(name='Ignored')),
+            dict(key='COLLECT2', version=3, data=dict(name='Child', parentCollection='COLLECT1')),
+            dict(key='COLLECT3', version=3, data=dict(name='Other'))]
+    snap = snapshot(config, [item(collections=['COLLECT2', 'COLLECT3']), attachment(),
+                             item('PAPER002', collections=['COLLECT3'])], cols)
+    initial = a.analyze(snap, config)
+    a.save_audit(config, snap, initial['issues'])
+    scope.change(config, 'add', 'COLLECT1')
+    scoped = scope.scope(snap, config)
+    assert [i['key'] for i in scoped['items']] == ['PAPER002']
+    assert [c['key'] for c in scoped['collections']] == ['COLLECT3']
+    assert len(snap['items']) == 3  # original snapshot retained
+    result = a.analyze(snap, config)
+    assert result['bibliographic_items'] == 1 and result['attachments'] == 0
+    assert all('PAPER001' not in i['item_keys'] for i in result['issues'])
+    a.save_audit(config, snap, result['issues'])
+    state = a.read_state(config)
+    old = [i for i in state['issues'] if 'PAPER001' in i['item_keys']]
+    assert old and all(i['detected'] for i in old)  # exclusions do not falsely resolve findings
+    assert all('PAPER001' not in i['item_keys'] for i in scope.visible_issues(state['issues'], scoped))
+    with pytest.raises(z.ZoteroError, match='not found'):
+        a.mark(config, old[0]['issue_key'], 'resolved', '')
+    scope.change(config, 'remove', 'COLLECT1')
+    assert a.analyze(snap, config)['bibliographic_items'] == 2
+
+
+def test_ignore_cli_persistence_validation_and_library_isolation(config, monkeypatch, capsys):
+    from nora_cli import zotero_scope as scope
+    monkeypatch.setenv('ZOTERO_LIBRARY_ID', '123')
+    prefix = ['zotero', '--data-dir', str(config.data_dir), 'ignore']
+    assert main(prefix + ['add', 'COLLECT1']) == 0
+    assert main(prefix + ['add', 'COLLECT1']) == 0
+    assert scope.ignored_collections(config) == {'COLLECT1'}
+    assert main(prefix + ['add', '_quan']) == 1
+    assert scope.ignored_collections(z.Config('456', data_dir=config.data_dir)) == set()
+    (config.state_dir / 'ignored_collections.json').write_text('{broken')
+    with pytest.raises(z.ZoteroError, match='refusing'):
+        scope.scope(snapshot(config), config)
+
+
+def test_underscore_rule_inbox_exception_descendants_and_renames(config):
+    from nora_cli import zotero_scope as scope
+    names = [('_archive', False), ('history', 'COL00001'), ('_inbox', False),
+             ('conference', 'COL00003'), ('_private', 'COL00003'), ('_inbox', 'COL00001'),
+             ('_books', False), ('_quan', False), ('topic', False), ('_inbox_old', False)]
+    cols = [dict(key=f'COL{n:05}', version=3, data=dict(name=name, parentCollection=parent))
+            for n, (name, parent) in enumerate(names, 1)]
+    records = [item(f'PAP{n:05}', collections=[c['key']]) for n, c in enumerate(cols, 1)]
+    records += [item('UNFILED1', collections=[]), item('SHARED01', collections=['COL00001', 'COL00009'])]
+    snap = snapshot(config, records, cols)
+    filtered = scope.scope(snap, config)
+    assert {c['key'] for c in filtered['collections']} == {'COL00003', 'COL00004', 'COL00009'}
+    assert {i['key'] for i in filtered['items']} == {'PAP00003', 'PAP00004', 'PAP00009', 'UNFILED1'}
+    # No persistent key is necessary; a rename immediately changes scope.
+    cols[7]['data']['name'] = 'quan'
+    assert 'COL00008' not in scope.scope(snap, config)['_excluded_collections']
+    cols[8]['data']['name'] = '_topic'
+    assert 'COL00009' in scope.scope(snap, config)['_excluded_collections']
+
+
+def test_hidden_corrupt_issue_is_rejected(config):
+    snap = snapshot(config)
+    snap['collections'][0]['data']['name'] = '_private'
+    config.state_dir.mkdir(parents=True)
+    state = dict(schema_version=1, library=config.identity, snapshot=snap,
+                 issues=[{'item_keys': ['PAPER001'], 'disposition': 'INVALID'}])
+    path = config.state_dir / 'state.json'
+    path.write_text(json.dumps(state))
+    before = path.read_bytes()
+    with pytest.raises(z.ZoteroError, match='Invalid'):
+        a.read_state(config)
+    assert path.read_bytes() == before
+
+
+def test_trash_parent_and_children_excluded_but_real_orphan_reported(config):
+    from nora_cli.zotero_scope import scope
+    snap = snapshot(config, [item(deleted=1), attachment(), attachment('ORPHAN01', parentItem='MISSING1')])
+    result = a.analyze(snap, config)
+    missing = [i for i in result['issues'] if i['kind'] == 'missing_attachment_parent']
+    assert [i['item_keys'] for i in missing] == [['ORPHAN01']]
+    assert [i['key'] for i in scope(snap, config)['items']] == ['ORPHAN01']
+    snap['items'][0]['data']['deleted'] = 0
+    assert len(scope(snap, config)['items']) == 3
+
+
+def test_journal_freshness_blocks_apply_until_snapshot_catches_up(config, capsys):
+    from nora_cli.zotero_freshness import check
+    directory = config.state_dir / 'item_operations'
+    directory.mkdir(parents=True)
+    path = directory / 'operation.json'
+    path.write_text(json.dumps(dict(library=config.identity, status='verified', verified_library_version=4)))
+    snap = snapshot(config)
+    check(config, snap)
+    assert 'WARNING' in capsys.readouterr().out
+    with pytest.raises(z.ZoteroError, match='Nothing applied'):
+        check(config, snap, applying=True)
+    check(config, snapshot(config, version=4), applying=True)
+    path.write_text(json.dumps(dict(library=config.identity, status='needs_review', finished_at=snap['fetched_at'])))
+    with pytest.raises(z.ZoteroError):
+        check(config, snap, applying=True)
+    snap['fetched_at'] = '2026-10-29T12:00:00+00:00'
+    check(config, snap, applying=True)
+    path.write_text('invalid')
+    with pytest.raises(z.ZoteroError):
+        check(config, snap, applying=True)

@@ -2,13 +2,15 @@
 
 `nora zotero` connects to the Zotero Web API v3 using Python's standard library.
 It reads a shared library independently of project-local `nora literature` state.
-It works without `.nora/` or module initialization. All remote requests are GETs.
+It works without `.nora/` or module initialization. Audit, review, and project linking
+remain read-only remotely. Explicit collection edits can write to Zotero.
 
 The integration provides connection diagnostics, a complete metadata snapshot,
 deterministic library auditing, and a local review queue. `nora lit zotero`
 links selected library items to project papers and previews metadata updates.
-It does not download/upload attachments, extract PDF text, or edit Zotero
-tags/collections. Existing project IDs, roles, notes, reading states, and
+It does not download/upload attachments, extract PDF text, or edit Zotero tags.
+`collection edit` renames/reparents an existing collection; `collection create`
+creates one, and `collection add-items` appends memberships without removing any. Existing project IDs, roles, notes, reading states, and
 decision gates are preserved.
 
 ## Configuration
@@ -230,3 +232,160 @@ embedding service, vector database, LLM API, or pyzotero dependency is required.
 Protocol references: [Web API v3](https://www.zotero.org/support/dev/web_api/v3/basics),
 [versions and syncing](https://www.zotero.org/support/dev/web_api/v3/syncing),
 [data versus file syncing](https://www.zotero.org/support/sync).
+
+### Ignore entire collections
+
+By default, every collection whose **name starts with `_`** is excluded, except
+for the exact name `_inbox`. This applies at every depth and is re-evaluated on
+each snapshot, so newly added or renamed collections follow the rule automatically.
+Descendants of an excluded collection stay excluded even if named `_inbox`.
+Ordinary children of `_inbox` remain included; an `_inbox/_private` child is excluded.
+Unfiled items remain included. Exclusion still wins for items shared with active collections.
+
+For additional exclusions, use stable collection keys from the audit report
+(not names or paths):
+
+```sh
+nora zotero ignore add ABCD1234
+nora zotero ignore list
+nora zotero ignore remove ABCD1234
+```
+
+These commands are local-only and require library configuration but no API access.
+The policy lives in `<data-dir>/<library-type>-<library-id>/ignored_collections.json`.
+Use the same machine data directory for audit, review, and project linking; a different
+`--data-dir` has an independent policy. Policies are not automatically copied between machines.
+
+An ignored collection excludes its descendants, all member items, and their children
+(including attachments). Exclusion wins even when an item also belongs to an included
+collection. Audit counts, duplicate detection, tag summaries, and review lists exclude
+these records. Previously recorded review decisions are retained, not marked resolved;
+review marking cannot modify an excluded finding. Existing generated reports must be
+regenerated to reflect policy changes.
+
+Recursive imports skip excluded branches. Explicit imports of excluded items or
+collections fail with an explanation. Sync skips excluded items and preserves existing
+project entries and research state. Remove an explicit key exclusion to resume processing, provided the collection is
+not also excluded by the automatic naming rule. `ignore list` displays both rules;
+`ignore remove` only removes explicit keys.
+The complete metadata snapshot is still fetched and cached for consistency validation;
+this is a processing exclusion, not a network-download filter or cache erasure command.
+No Zotero collections, memberships, or tags are changed.
+
+
+### Rename or move an existing collection
+
+```sh
+nora zotero --env-file ~/.config/nora/zotero.env collection edit ABCD1234 --name new-name --parent EFGH5678
+# Review the preview; substitute the library version it actually reports:
+nora zotero --env-file ~/.config/nora/zotero.env collection edit ABCD1234 --name new-name --parent EFGH5678 --apply --expect-library-version 123
+```
+
+Use `--parent root` to move a collection to the top level. Omit `--name` or
+`--parent` to preserve that field. Preview performs only reads. Apply requires
+library write permission and the reviewed library version; the server also checks
+that version at write time. A changed library requires a new preview.
+
+Only the existing collection's name/parent fields are sent in a partial POST;
+its key, item memberships, and other fields are preserved. Cycles, duplicate sibling
+names, and ignored sources/destinations are rejected. This command does not create
+or delete collections or alter tags. An already-matching collection is a no-op.
+
+Before sending, the CLI saves a private record in the library state directory's
+`collection_operations/`, containing the previous/desired values and versions.
+It reads back the collection after writing and records verification. Network errors
+are not automatically retried: a `needs_review` or unfinished record means the remote
+change may already have happened. Inspect remote state before retrying. The journal
+supports a manually reviewed reverse edit; there is no automatic rollback command.
+Existing audit snapshots/reports are not rewritten; refresh them when needed.
+
+Protocol: [Zotero Web API write requests](https://www.zotero.org/support/dev/web_api/v3/write_requests).
+
+
+### Create collections and add memberships
+
+```sh
+nora zotero --env-file ~/.config/nora/zotero.env collection create --name gpu-security
+nora zotero --env-file ~/.config/nora/zotero.env collection add-items COLLECTION_KEY --item ITEM_KEY --item ANOTHER_KEY
+```
+
+Both commands preview by default. After reviewing each preview, repeat its exact
+arguments with `--apply --expect-library-version VERSION` using the reported version.
+Each write changes the library version: obtain a fresh preview for subsequent steps.
+Creation accepts an optional `--parent KEY` (default `root`). If exactly one collection
+already has that name under that parent, creation is a no-op and reports its key.
+
+`add-items` accepts up to 50 distinct top-level bibliographic item keys. It reads the
+selected records and appends the destination to each existing membership list; it does
+not remove inbox/project memberships, change tags, or create duplicate book/paper
+records. Already-present memberships are no-ops. Ignored sources/items/destinations
+are rejected. The library version is checked on reads and at the remote write.
+
+Operations are journaled before transmission and read back afterward. Batch writes
+can partially succeed: a failed or unconfirmed batch is recorded as `needs_review`;
+there is no automatic retry or rollback. Inspect current memberships and the journal,
+then generate a fresh preview to apply only remaining additions. An uncertain creation
+must be checked using its journaled key and remote name before attempting another.
+
+To finish inbox triage while assigning a topic, add `--finish-inbox` to `add-items`.
+This explicitly removes memberships in collections named `_inbox` and all their
+descendants, preserving every other membership and adding the destination in the
+same item update. The destination must be outside inbox and within the allowed
+scope. The preview lists the removed inbox keys. Already-classified items can use
+this option too; ignored items remain blocked. Empty inbox folders are preserved.
+
+### Move one item to Trash
+
+`nora zotero --env-file ~/.config/nora/zotero.env item trash ITEM_KEY`
+previews moving one top-level bibliographic item to Zotero Trash. Repeat with
+`--apply --expect-library-version VERSION` only after authorizing the identified
+item. This sends a partial `deleted: 1` update, not a permanent DELETE. Ignored
+items are blocked; already-trashed items are no-ops. The command journals the
+operation under `item_operations/` and verifies the trashed flag by reading with
+`includeTrashed=1`. Restore through Zotero Trash if needed. No empty-trash or
+permanent-deletion command is provided. Refresh audit snapshots afterward.
+
+References: [Zotero API search parameters](https://www.zotero.org/support/dev/web_api/v3/basics),
+[Pyzotero item deletion documentation](https://pyzotero.readthedocs.io/en/latest/).
+
+To drop venue/year organization while keeping pending papers in inbox, use
+`collection add-items INBOX_ROOT_KEY --item KEY --flatten-inbox`. The destination
+must be the top-level `_inbox`; only its descendant memberships are removed, and
+all other memberships are preserved. This is mutually exclusive with `--finish-inbox`.
+
+`collection delete-empty KEY` previews deletion of an empty leaf collection.
+Application requires `--apply --expect-library-version VERSION`. It rejects inbox
+roots, ignored collections, collections with children, and any direct members
+(including trashed or ignored items). A library-version precondition guards the
+empty-check/write interval. Only the empty collection record is deleted; its old
+metadata is journaled. Do not use this command to delete papers or nonempty trees.
+
+## Snapshot freshness and trash
+
+Full item snapshots now request `includeTrashed=1` and retain the `deleted` flag.
+Active audits and project links exclude trashed records and their descendants,
+so an attachment whose parent is in Trash is not mistaken for an orphan.
+Refresh older snapshots with `audit --write` to obtain this information.
+
+Offline audit and project-link previews consult local collection/item operation
+journals and warn when a verified newer version or uncertain write makes the saved
+snapshot stale. Offline import/sync with `--apply` refuses that known stale state.
+Refresh online after writes; journals are retained. An unfinished `attempting`
+journal requires inspecting the operation before continuing. This check cannot
+observe edits made by other clients or machines while offline.
+
+The literature skill provides `zotero-review` and `zotero-organize` workflows for
+library-wide work without project initialization. Attachment transfer and a native
+resumable bulk-plan command remain unsupported.
+
+## Default collection organization
+
+Across libraries, ignore underscore-prefixed collections except exact `_inbox`,
+their descendants, and any items with an ignored membership. The CLI enforces
+these exclusions even when an item also belongs to a visible collection.
+
+The literature skill organizes collections by research topic, problem, or project,
+not publication venue. It does not propose venue collections or venue/year inbox
+subdivisions. Venue remains bibliographic metadata. This is a general skill rule,
+not a restriction on collection names in the low-level CLI. Existing venue trees
+are only changed as part of an authorized concrete cleanup plan.

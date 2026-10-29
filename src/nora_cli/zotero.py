@@ -1,6 +1,6 @@
-"""Read-only Zotero Web API v3 client and machine-scoped CLI.
+"""Zotero Web API v3 client and machine-scoped CLI.
 
-No project initialization, implicit dotenv loading, or remote write methods.
+No project initialization or implicit dotenv loading. Collection edits require explicit --apply.
 Credentials stay in memory; saved state contains only normalized library data.
 """
 from __future__ import annotations
@@ -204,6 +204,8 @@ def validate_objects(records: list, resource: str):
                 raise ZoteroError("Invalid Zotero parent reference.")
         if resource == "collections":
             continue
+        if "deleted" in data and (type(data["deleted"]) is not int or data["deleted"] not in {0, 1}):
+            raise ZoteroError("Invalid Zotero trash status.")
         if not data.get("itemType"):
             raise ZoteroError("Zotero item has no itemType.")
         for name in ("creators", "tags", "collections"):
@@ -230,6 +232,8 @@ class Client:
             raise ZoteroError("Unsupported Zotero resource.")
         query = urllib.parse.urlencode({"format": "json", "limit": limit, "start": start,
                                        "sort": "dateAdded", "direction": "asc"})
+        if resource == "items":
+            query += "&includeTrashed=1"
         return _get(f"{self.base}/{resource}?{query}", self.config.api_key)
 
     def probe(self) -> tuple[int, int]:
@@ -268,7 +272,7 @@ class Client:
         # Whitelist library metadata. Never save note text, annotations, or credentials.
         item_fields = {"itemType", "title", "creators", "date", "DOI", "url", "publicationTitle",
                        "proceedingsTitle", "abstractNote", "tags", "collections", "parentItem",
-                       "linkMode", "contentType", "path", "filename", "md5", "mtime"}
+                       "linkMode", "contentType", "path", "filename", "md5", "mtime", "deleted"}
         kept = [{"key": i["key"], "version": i.get("version"),
                  "data": {k: v for k, v in i["data"].items() if k in item_fields}}
                 for i in items if i["data"].get("itemType") not in {"note", "annotation"}]
@@ -285,6 +289,16 @@ def _parser():
     parser.add_argument("--env-file", help="explicit literal Zotero env file; never sourced or auto-discovered")
     parser.add_argument("--data-dir", help="persistent machine state root (absolute path)")
     sub = parser.add_subparsers(dest="command")
+    from .zotero_collections import add_parser
+    add_parser(sub)
+    from .zotero_items import add_parser as add_item_parser
+    add_item_parser(sub)
+    ignore = sub.add_parser("ignore", help="persistent per-library collection exclusions (local only)")
+    ignore_sub = ignore.add_subparsers(dest="ignore_command")
+    ignore_sub.add_parser("list")
+    for action in ("add", "remove"):
+        child = ignore_sub.add_parser(action)
+        child.add_argument("key", help="stable collection key; descendants and member items are also excluded")
     doctor = sub.add_parser("doctor", help="check configuration and library read access")
     doctor.add_argument("--offline", action="store_true", help="configuration checks only")
     audit = sub.add_parser("audit", help="read all library metadata and report findings; remote is always read-only")
@@ -314,12 +328,30 @@ def cmd_zotero(argv: list[str]) -> int:
     if args.command == "audit" and (args.limit < 0 or (args.offline and args.write)):
         parser.error("--limit must be nonnegative; --offline cannot be combined with --write")
     from . import zotero_audit as audit
+    from . import zotero_scope as scope
     try:
         config = load_config(args.config, args.env_file, args.data_dir)
+        if args.command == "item":
+            from .zotero_items import run
+            return run(config, args)
+        if args.command == "collection":
+            from .zotero_collections import run
+            return run(config, args)
+        if args.command == "ignore":
+            if args.ignore_command in {"add", "remove"}:
+                scope.change(config, args.ignore_command, args.key)
+            print("Automatic rule: ignore names starting with _, except exact name _inbox; descendants are excluded too.")
+            print("Additional ignored collection keys:")
+            for key in sorted(scope.ignored_collections(config)):
+                print(key)
+            print(f"Local policy: {config.state_dir / 'ignored_collections.json'}")
+            return 0
         if args.command == "doctor":
             print(f"Library: {config.identity}")
             print(f"API key: {'configured' if config.api_key else 'not configured'} ({config.key_source})")
             print(f"Local state: {config.state_dir}")
+            print("Collection rule: ignore _* except _inbox (including descendants).")
+            print(f"Additional ignored collection keys: {len(scope.ignored_collections(config))}")
             for name, path in [("Linked PDF root", config.pdf_dir), ("Zotero storage root", config.storage_dir)]:
                 print(f"{name}: " + ("not configured" if path is None else "exists" if path.is_dir() else "missing on this machine"))
             if args.offline:
@@ -336,7 +368,9 @@ def cmd_zotero(argv: list[str]) -> int:
                 state = audit.read_state(config)
                 if not state["snapshot"]:
                     raise ZoteroError("No saved audit; run audit --write first.")
-                for issue in state["issues"]:
+                from .zotero_freshness import check
+                check(config, state["snapshot"])
+                for issue in scope.visible_issues(state["issues"], scope.scope(state["snapshot"], config)):
                     status = audit.issue_status(issue)
                     if args.status in {"all", status}:
                         changed = " [evidence changed since review]" if issue.get("evidence_changed") else ""
@@ -347,11 +381,15 @@ def cmd_zotero(argv: list[str]) -> int:
         snapshot = state["snapshot"] if args.offline else Client(config).snapshot()
         if snapshot is None:
             raise ZoteroError("No saved full snapshot; run audit --write online first.")
+        if args.offline:
+            from .zotero_freshness import check
+            check(config, snapshot)
         result = audit.analyze(snapshot, config)
         issues = audit.reconcile(state["issues"], result["issues"], snapshot["fetched_at"])
         if args.write:
             issues = audit.save_audit(config, snapshot, result["issues"])
-        report = audit.render(snapshot, result, issues, args.limit, offline=args.offline)
+        scoped = scope.scope(snapshot, config)
+        report = audit.render(snapshot, result, scope.visible_issues(issues, scoped), args.limit, offline=args.offline)
         print(report)
         if args.write:
             audit.write_report(config, report)
@@ -363,5 +401,7 @@ def cmd_zotero(argv: list[str]) -> int:
         print(f"ERROR: {exc}")
         return 1
     except (OSError, UnicodeError):
-        print("ERROR: local file access failed; check paths and permissions. No remote writes were made.")
+        print("ERROR: local file access failed; check paths and permissions. "
+              + ("Inspect the operation journal before retrying a collection write." if args.command in {"collection", "item"}
+                 else "No remote writes were made."))
         return 1

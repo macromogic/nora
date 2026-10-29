@@ -1,6 +1,6 @@
 ---
 name: nora-literature-manager
-description: Track, triage, and organize research literature around the structured papers.yaml backend — ingesting candidates, assigning roles, maintaining a decision-gated reading lifecycle, and keeping per-paper notes. Use this skill when collecting related work, deciding what to read next, taking notes on a paper, or mapping how papers relate to the project. Works with or without web search tools, and with or without a Nora project.
+description: Track, triage, and organize research literature around the structured papers.yaml backend — ingesting candidates, assigning roles, maintaining a decision-gated reading lifecycle, and keeping per-paper notes. Use this skill when collecting related work, deciding what to read next, taking notes on a paper, or mapping how papers relate to the project. Also inspect and organize a shared Zotero library without requiring a Nora project.
 ---
 
 # Nora Literature Manager
@@ -14,8 +14,10 @@ Division of labor, in one line each:
 - **CLI** (`nora literature ...`): ingest, dedup, status transitions (with the decision gate enforced mechanically), coverage report, rendered markdown views.
 - **This skill**: relevance judgment, role assignment, reading rationale, per-paper notes under `PAPER_NOTES/`.
 
-This skill currently supports five workflows:
+This skill currently supports seven workflows:
 
+- `zotero-review`: inspect a shared library and propose evidence-based organization
+- `zotero-organize`: execute an authorized collection cleanup and verify results
 - `search`: collect candidate papers (via web/search tools if available, or from user-supplied material) and ingest them
 - `triage`: judge candidates, assign roles and relevance notes, queue what's worth reading
 - `reading-queue`: view and advance the reading queue through the status machine
@@ -32,6 +34,16 @@ This skill does not:
 - Edit `papers.yaml` by hand — ever. All mutations go through `nora literature` commands. If a command is missing for something, say so and propose it; don't work around the CLI.
 
 ## Shared Zotero library
+
+Default collection organization rules for every library:
+
+- Ignore collections whose names start with `_`, except exact `_inbox`, together
+  with their descendants. An ignored membership excludes the entire item, even
+  when it also belongs to a visible collection. Do not bypass this CLI policy.
+- Organize by research topic, problem, or project, not publication venue. Do not
+  create venue collections or venue/year trees, including under `_inbox`. Keep
+  venue as bibliographic metadata. Existing venue collections may be proposed for
+  cleanup, but changing them still requires authorization for the concrete plan.
 
 For Zotero library inspection or cleanup planning, use `nora zotero` (see `nora zotero help`).
 This machine-scoped workflow needs no `.nora/` or literature initialization; do not run
@@ -61,7 +73,9 @@ explicit choice to overwrite conflicting metadata, not an automatic repair.
 New entries are candidates. Existing project roles/status/notes/decisions stay local;
 Zotero tags do not authorize promotion. Links opt papers.yaml into schema 2, with a
 pre-change backup. Update Nora on other machines before using a linked project there.
-Attachment transfer and Zotero write-back are not implemented.
+Collection creation/editing/membership changes, empty-leaf deletion, and moving items to trash are supported. Attachment transfer is not implemented.
+For library review, read [workflows/zotero-review.md](workflows/zotero-review.md); for authorized cleanup, read [workflows/zotero-organize.md](workflows/zotero-organize.md).
+Route these requests before project preconditions: they do not require literature initialization.
 
 ## Precondition: Nora state is optional (project literature workflows)
 
@@ -70,11 +84,13 @@ Run `nora root` first to resolve the workspace. This skill does not require a fu
 - If `.nora/` exists, read `.nora/PROJECT_STATE.yaml` / `.nora/CONTEXT_BRIEF.md` so triage judgments are grounded in what the project is actually about.
 - If `.nora/` does not exist, run in **standalone literature mode**: state this explicitly, and let `nora literature init` create just `.nora/literature/`.
 
-Before any workflow, check that `.nora/literature/papers.yaml` exists (`nora literature doctor`). If the module isn't initialized, ask the user before running `nora literature init`. If doctor reports a pre-0.4 layout (markdown files, no papers.yaml), tell the user the module was redesigned and let *them* decide when to move the old files aside — don't delete or migrate anything on your own.
+Before any project literature workflow, check that `.nora/literature/papers.yaml` exists (`nora literature doctor`). If the module isn't initialized, ask the user before running `nora literature init`. If doctor reports a pre-0.4 layout (markdown files, no papers.yaml), tell the user the module was redesigned and let *them* decide when to move the old files aside — don't delete or migrate anything on your own.
 
 ## Argument routing
 
-- If `$ARGUMENTS` is `help` → print this skill's usage: the supported workflows (`search`, `triage`, `reading-queue`, `paper-note`, `related-work-map`) and their invocation form (e.g. `/nora-literature-manager triage`). Do not run any workflow.
+- If the request is Zotero library inspection or `$ARGUMENTS` starts with `zotero-review` → follow `workflows/zotero-review.md`, without project initialization.
+- If the request is authorized Zotero organization or `$ARGUMENTS` starts with `zotero-organize` → follow `workflows/zotero-organize.md`, without project initialization.
+- If `$ARGUMENTS` is `help` → print this skill's usage: the supported workflows (`zotero-review`, `zotero-organize`, `search`, `triage`, `reading-queue`, `paper-note`, `related-work-map`) and their invocation form (e.g. `/nora-literature-manager triage`). Do not run any workflow.
 - If `$ARGUMENTS` starts with `search` → follow `workflows/search.md`.
 - If `$ARGUMENTS` starts with `triage` → follow `workflows/triage.md`.
 - If `$ARGUMENTS` starts with `reading-queue` → follow `workflows/reading-queue.md`.
