@@ -25,7 +25,19 @@ nora doctor           # 检查全局安装 + 项目状态 + 可选模块
 nora citation init    # 引用/BibTeX 审计
 nora literature init  # 文献追踪(papers.yaml 结构化状态 + 决策门强制)
 nora writing init     # 写作辅助(nora writing lint 机械护栏)
+
+# 共享 Zotero 文献库（无需项目或模块初始化）:
+nora zotero --env-file /path/to/zotero.env doctor
+nora zotero --env-file /path/to/zotero.env audit --write
 ```
+
+Zotero 首期支持只读全库审计与本地审阅队列：collection/tag 分布、重复候选、缺失字段和本机 PDF 可用性。
+配置、快照和审阅记录位于机器级目录；不会改动 Zotero 或项目文献状态。详见 [Zotero 使用说明](docs/zotero.md)。
+
+已有文献模块的项目可用 `nora lit zotero import --item KEY` 或 `--collection KEY` 预览关联，
+用 `nora lit zotero sync` 预览元数据更新；添加 `--apply` 才写入项目。保留项目 ID、角色、
+阅读状态、笔记和决策，身份歧义/字段冲突会阻断应用。首次关联升级到 schema 2 并备份，
+跨机器使用前需要更新 Nora。详见 [项目关联](docs/zotero.md#project-literature-links)。
 
 在 agent 会话里使用（以 Claude Code 为例）：
 

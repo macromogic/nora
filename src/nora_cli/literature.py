@@ -30,6 +30,7 @@ Commands:
   nora literature expand    Citation-graph expansion from a tracked paper (--seed <id>,
                             --direction refs|cites|both); hits enter candidate state
   nora literature ingest    Add candidate papers (--bibtex FILE | --titles FILE | --title ... manual entry)
+  nora literature zotero    Import selected Zotero items/collections or sync linked metadata (preview by default)
   nora literature dedup     Report likely duplicates in papers.yaml (never merges automatically)
   nora literature queue     List papers in the reading queue (status queued/reading)
   nora literature mark      Change a paper's status, roles (--role), or note (--note);
@@ -687,6 +688,8 @@ def cmd_doctor(base: Path) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nora literature", add_help=True)
     sub = parser.add_subparsers(dest="subcmd")
+    from . import zotero_link
+    zotero_link.add_parser(sub)
 
     search = sub.add_parser("search", help="search external sources for candidate papers")
     search.add_argument("--query", required=True)
@@ -748,8 +751,22 @@ def cmd_literature(argv: list[str]) -> int:
         return int(e.code or 0)
 
     base = _base()
+    try:
+        return _dispatch(base, args)
+    except ps.PapersError as exc:
+        print(f"ERROR: {exc}")
+        return 1
+    except OSError:
+        print("ERROR: literature file access failed; check paths and permissions.")
+        return 1
+
+
+def _dispatch(base: Path, args) -> int:
     if args.subcmd == "init":
         return cmd_init(base)
+    if args.subcmd == "zotero":
+        from . import zotero_link
+        return zotero_link.run(base, args)
     if args.subcmd == "search":
         return cmd_search(base, args)
     if args.subcmd == "expand":

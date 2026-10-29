@@ -76,6 +76,7 @@ Core commands:
   nora doctor          Check global install + core project state + optional module status
   nora install-skills  Symlink all Nora skills into Claude Code / Codex (alias: nora install-skill)
   nora update          Pull the latest nora CLI and skills from git
+  nora zotero          Shared Zotero library: connection doctor, read-only audit, local review queue
 
 Optional module commands (each module is off until explicitly enabled):
   nora citation <subcommand>         Citation hygiene backend: lint/normalize/fix/keygen over .bib/.tex (run 'nora citation help')
@@ -443,6 +444,9 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_root()
     if cmd == "doctor":
         return cmd_doctor()
+    if cmd == "zotero":
+        from . import zotero as zot_mod
+        return zot_mod.cmd_zotero(args[1:])
     if cmd in ("literature", "lit"):
         from . import literature as lit_mod
         return lit_mod.cmd_literature(args[1:])

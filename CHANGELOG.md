@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `nora lit zotero import|sync`: preview-first project links for selected Zotero items/collections, exact DOI/arXiv/title matching with explicit ambiguity resolution, and three-way metadata updates. Existing project IDs, roles, statuses, notes and decisions are preserved; new entries stay candidate. `--apply` creates a backup, saves atomically, and refreshes views. Linked projects opt into schema 2; standalone schema 1 projects remain compatible.
+- Literature writes now use atomic replacement, a shared writer lock, and optimistic checks against the loaded revision, preventing concurrent search/mark/import writes from silently losing project links or decisions.
+- `nora zotero doctor|audit|review`: standard-library-only, read-only Zotero Web API v3 integration, independent of project initialization. Explicit env-file or machine JSON configuration; credentials stay out of output and state.
+- Full-library audit of collections/tags, normalized DOI/title duplicate candidates, metadata gaps, and local PDF attachment availability. All pages and collections must share one library version before a snapshot is accepted; failed reads preserve existing state.
+- Machine-scoped atomic snapshot/review storage and `audit --offline`. Detection is separate from user disposition: ignored/resolved choices survive disappearance and reappearance, with changed evidence flagged. `audit` is a preview unless `--write` is specified; review marking never changes Zotero or project decisions.
+- Zotero usage guide and literature-skill guidance. Connector/review design incorporates lessons from the Robo prototype without its model or vector-index dependencies.
+
 ## [0.7.0] - 2026-07-08
 
 Alpha. This completes the system-centric main line (Stages 0–8): all three

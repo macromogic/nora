@@ -11,7 +11,10 @@ being silently misread.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import tempfile
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -22,11 +25,13 @@ FIELDS = [
     "id", "title", "authors", "year", "venue", "doi", "arxiv", "url",
     "source", "status", "roles", "decision", "added", "updated", "note",
 ]
+OPTIONAL_FIELDS = ["zotero"]  # JSON-encoded identity/version/last remote metadata; schema 2 only
+METADATA_FIELDS = ("title", "authors", "year", "venue", "doi", "arxiv", "url")
 
 LIST_FIELDS = {"authors", "roles"}
 INT_FIELDS = {"year"}
 
-SOURCES = ["manual", "bibtex", "title_list", "search", "expand"]
+SOURCES = ["manual", "bibtex", "title_list", "search", "expand", "zotero"]
 
 STATUSES = ["candidate", "queued", "reading", "read", "proposed_cite", "cited", "rejected"]
 
@@ -73,16 +78,17 @@ def _emit_value(value) -> str:
 
 
 def emit(papers: list[dict]) -> str:
+    version = 2 if any("zotero" in p for p in papers) else SCHEMA_VERSION
     lines = [
         "# Literature state. Single source of truth for the literature module.",
         "# Written and parsed only by the nora CLI (strict YAML subset) — use",
         "# 'nora literature' commands instead of editing by hand.",
-        f"schema_version: {SCHEMA_VERSION}",
+        f"schema_version: {version}",
         "papers:" if papers else "papers: []",
     ]
     for paper in papers:
         prefix = "  - "
-        for field in FIELDS:
+        for field in FIELDS + [f for f in OPTIONAL_FIELDS if f in paper]:
             lines.append(prefix + f"{field}: {_emit_value(paper.get(field))}")
             prefix = "    "
     return "\n".join(lines) + "\n"
@@ -144,6 +150,7 @@ def parse(text: str) -> list[dict]:
     papers: list[dict] = []
     current: dict | None = None
     saw_version = False
+    version = 1
     saw_papers = False
 
     for lineno, line in enumerate(lines, 1):
@@ -151,9 +158,10 @@ def parse(text: str) -> list[dict]:
             continue
         if line.startswith("schema_version:"):
             raw = line.partition(":")[2].strip()
-            if raw != str(SCHEMA_VERSION):
+            if raw not in {"1", "2"}:
                 raise PapersError(
-                    f"papers.yaml:{lineno}: unsupported schema_version {raw} (expected {SCHEMA_VERSION})")
+                    f"papers.yaml:{lineno}: unsupported schema_version {raw} (expected 1 or 2)")
+            version = int(raw)
             saw_version = True
             continue
         if line.startswith("papers:"):
@@ -173,7 +181,7 @@ def parse(text: str) -> list[dict]:
         field, sep, raw = body.partition(": ")
         if not sep and body.endswith(":"):
             field, raw = body[:-1], ""
-        if field not in FIELDS:
+        if field not in FIELDS + OPTIONAL_FIELDS:
             raise PapersError(f"papers.yaml:{lineno}: unknown field: {field!r}")
         if field in current:
             raise PapersError(f"papers.yaml:{lineno}: duplicate field: {field!r}")
@@ -185,18 +193,113 @@ def parse(text: str) -> list[dict]:
         for field in FIELDS:
             if field not in paper:
                 raise PapersError(f"papers.yaml: entry {paper.get('id', '?')!r} missing field {field!r}")
+        if "zotero" in paper and version != 2:
+            raise PapersError("papers.yaml: Zotero links require schema_version 2")
+    validate_links(papers)
     return papers
+
+
+def zotero_link(paper: dict):
+    if "zotero" not in paper:
+        return None
+    try:
+        link = json.loads(paper["zotero"])
+        if set(link) != {"library", "key", "version", "baseline"}:
+            raise ValueError()
+        if not re.fullmatch(r"(?:user|group):[1-9][0-9]*", link["library"]):
+            raise ValueError()
+        if not re.fullmatch(r"[A-Z0-9]{8}", link["key"]):
+            raise ValueError()
+        if type(link["version"]) is not int or link["version"] < 0:
+            raise ValueError()
+        baseline = link["baseline"]
+        if set(baseline) != set(METADATA_FIELDS):
+            raise ValueError()
+        for name in METADATA_FIELDS:
+            value = baseline[name]
+            if name == "authors":
+                valid = isinstance(value, list) and all(isinstance(a, str) for a in value)
+            elif name == "year":
+                valid = value is None or type(value) is int
+            else:
+                valid = value is None or isinstance(value, str)
+            if not valid:
+                raise ValueError()
+        if not isinstance(baseline["title"], str) or not baseline["title"].strip():
+            raise ValueError()
+        return link
+    except (ValueError, TypeError, KeyError):
+        raise PapersError("papers.yaml: invalid Zotero identity/version/baseline; preserve state and restore a valid backup") from None
+
+
+def validate_links(papers: list[dict]):
+    identities = set()
+    for paper in papers:
+        link = zotero_link(paper)
+        if link:
+            identity = (link["library"], link["key"])
+            if identity in identities:
+                raise PapersError("papers.yaml: duplicate Zotero identity linked to multiple project papers")
+            identities.add(identity)
+
+
+class LoadedPapers(list):
+    """List with the read revision, so existing literature writers cannot lose new links."""
+
+    def __init__(self, papers, original_text):
+        super().__init__(papers)
+        self.original_text = original_text
 
 
 def load(base: Path) -> list[dict]:
     path = papers_path(base)
     if not path.is_file():
         raise PapersError(f"{path} not found. Run 'nora literature init' first.")
-    return parse(path.read_text())
+    text = path.read_text()
+    return LoadedPapers(parse(text), text)
 
 
-def save(base: Path, papers: list[dict]) -> None:
-    papers_path(base).write_text(emit(papers))
+def save(base: Path, papers: list[dict], *, expected_text=None, backup=False) -> None:
+    """Atomic replacement; link imports additionally compare the text they planned against."""
+    path = papers_path(base)
+    if expected_text is None and isinstance(papers, LoadedPapers):
+        expected_text = papers.original_text
+    text = emit(papers)
+    # Also validates optional link records before any mutation.
+    parse(text)
+    lock = path.with_name(".papers.write.lock")
+    try:
+        fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise PapersError("Literature state is locked by another writer; inspect .papers.write.lock if a writer crashed.") from None
+    temporary = None
+    try:
+        os.close(fd)
+        old = path.read_text() if path.exists() else None
+        if expected_text is not None and old != expected_text:
+            raise PapersError("Literature state changed since planning; rerun preview. Nothing applied.")
+        if old == text:
+            return
+        if backup and old is not None:
+            folder = path.parent / "backups"
+            folder.mkdir(exist_ok=True)
+            backup_fd, _ = tempfile.mkstemp(prefix="papers-zotero-", suffix=".yaml", dir=str(folder))
+            with os.fdopen(backup_fd, "w", encoding="utf-8") as stream:
+                stream.write(old)
+                stream.flush()
+                os.fsync(stream.fileno())
+        fd, temporary = tempfile.mkstemp(prefix=".papers-", dir=str(path.parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        if isinstance(papers, LoadedPapers):
+            papers.original_text = text
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+        lock.unlink()
 
 
 # --- normalization and IDs --------------------------------------------------
